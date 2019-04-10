@@ -33,7 +33,7 @@ class FocalLoss(nn.Module):
         lb_one_hot = logits.data.clone().zero_().scatter_(1, label.unsqueeze(1), 1)
         pt = torch.where(lb_one_hot == 1, probs, 1-probs)
         alpha = self.alpha*lb_one_hot + (1-self.alpha)*(1-lb_one_hot)
-        loss = -alpha*((1-pt)**self.gamma)*torch.log(pt)
+        loss = -alpha*((1-pt)**self.gamma)*torch.log(pt + 1e-12)
         if self.reduction == 'none':
             loss[mask] = 0
         elif self.reduction == 'mean':
