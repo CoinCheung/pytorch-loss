@@ -21,6 +21,10 @@ class DiceLoss(nn.Module):
         self.ignore_lb = ignore_lb
 
     def forward(self, logits, label):
+        '''
+        args: logits: tensor of shape (N, C, H, W)
+        args: label: tensor of shape(N, H, W)
+        '''
         # overcome ignored label
         ignore = label.data.cpu() == self.ignore_lb
         label[ignore] = 0
