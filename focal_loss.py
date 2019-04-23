@@ -1,7 +1,6 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class FocalLoss(nn.Module):
@@ -34,9 +33,8 @@ class FocalLoss(nn.Module):
         pt = torch.where(lb_one_hot == 1, probs, 1-probs)
         alpha = self.alpha*lb_one_hot + (1-self.alpha)*(1-lb_one_hot)
         loss = -alpha*((1-pt)**self.gamma)*torch.log(pt + 1e-12)
-        if self.reduction == 'none':
-            loss[mask] = 0
-        elif self.reduction == 'mean':
+        loss[mask] = 0
+        if self.reduction == 'mean':
             loss = loss.sum()/n_valid
         return loss
 
