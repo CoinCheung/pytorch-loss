@@ -17,7 +17,7 @@ class DiceLoss(nn.Module):
         self.p = p
         self.smooth = smooth
         self.reduction = reduction
-        self.weight = torch.tensor(weight)
+        self.weight = None if weight is None else torch.tensor(weight)
         self.ignore_lb = ignore_lb
 
     def forward(self, logits, label):
@@ -32,12 +32,12 @@ class DiceLoss(nn.Module):
         ignore = ignore.nonzero()
         _, M = ignore.size()
         a, *b = ignore.chunk(M, dim=1)
-        lb_one_hot[[a, torch.zeros(lb_one_hot.size(1)), *b]] = 0
+        lb_one_hot[[a, torch.arange(lb_one_hot.size(1)), *b]] = 0
 
         # compute loss
         probs = torch.sigmoid(logits)
         numer = torch.sum((probs*lb_one_hot), dim=(2, 3))
-        denom = torch.sum(probs.pow(self.p)+lb_one_hot.pow(self.p)).sum(dim=(2, 3))
+        denom = torch.sum(probs.pow(self.p)+lb_one_hot.pow(self.p), dim=(2, 3))
         loss = 1 - 2*(numer+self.smooth)/(denom+self.smooth)
         if not self.weight is None:
             loss *= self.weight.view(1, -1)
@@ -48,3 +48,12 @@ class DiceLoss(nn.Module):
             loss = loss.sum(dim=1).mean()
         return loss
 
+
+if __name__ == '__main__':
+    criteria = DiceLoss()
+    logits = torch.randn(16, 19, 14, 14)
+    label = torch.randint(0, 19, (16, 14, 14))
+    label[2, 3, 3] = 255
+
+    loss = criteria(logits, label)
+    print(loss)

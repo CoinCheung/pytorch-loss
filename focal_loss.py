@@ -38,12 +38,13 @@ class FocalLoss(nn.Module):
         alpha = self.alpha*lb_one_hot + (1-self.alpha)*(1-lb_one_hot)
         loss = -alpha*((1-pt)**self.gamma)*torch.log(pt + 1e-12)
         loss[mask == 0] = 0
+        print(loss.size())
         if self.reduction == 'mean':
-            loss = loss.sum()/n_valid
+            loss = loss.sum(dim=1).sum()/n_valid
         return loss
 
 if __name__ == '__main__':
-    criteria = FocalLoss()
+    criteria = FocalLoss(alpha=1, gamma=2)
     logits = torch.randn(16, 19, 14, 14)
     label = torch.randint(0, 19, (16, 14, 14))
     label[2, 3, 3] = 255
