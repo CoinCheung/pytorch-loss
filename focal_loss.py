@@ -16,6 +16,10 @@ class FocalLoss(nn.Module):
         self.ignore_lb = ignore_lb
 
     def forward(self, logits, label):
+        '''
+        args: logits: tensor of shape (N, C, H, W)
+        args: label: tensor of shape(N, H, W)
+        '''
         # overcome ignored label
         ignore = label.data.cpu() == self.ignore_lb
         n_valid = (ignore == 0).sum()
@@ -33,7 +37,7 @@ class FocalLoss(nn.Module):
         pt = torch.where(lb_one_hot == 1, probs, 1-probs)
         alpha = self.alpha*lb_one_hot + (1-self.alpha)*(1-lb_one_hot)
         loss = -alpha*((1-pt)**self.gamma)*torch.log(pt + 1e-12)
-        loss[mask] = 0
+        loss[mask == 0] = 0
         if self.reduction == 'mean':
             loss = loss.sum()/n_valid
         return loss
