@@ -38,7 +38,7 @@ class DiceLoss(nn.Module):
         probs = torch.sigmoid(logits)
         numer = torch.sum((probs*lb_one_hot), dim=(2, 3))
         denom = torch.sum(probs.pow(self.p)+lb_one_hot.pow(self.p), dim=(2, 3))
-        loss = 1 - 2*(numer+self.smooth)/(denom+self.smooth)
+        loss = 1 - (2*numer+self.smooth)/(denom+self.smooth)
         if not self.weight is None:
             loss *= self.weight.view(1, -1)
 
