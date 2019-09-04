@@ -27,12 +27,14 @@ class GeneralizedSoftDiceLoss(nn.Module):
         '''
         # overcome ignored label
         ignore = label.data.cpu() == self.ignore_lb
+        label = label.clone()
         label[ignore] = 0
         lb_one_hot = torch.zeros_like(logits).scatter_(1, label.unsqueeze(1), 1)
         ignore = ignore.nonzero()
         _, M = ignore.size()
         a, *b = ignore.chunk(M, dim=1)
         lb_one_hot[[a, torch.arange(lb_one_hot.size(1)).long(), *b]] = 0
+        lb_one_hot = lb_one_hot.detach()
 
         # compute loss
         probs = torch.sigmoid(logits)
@@ -69,12 +71,14 @@ class BatchSoftDiceLoss(nn.Module):
         '''
         # overcome ignored label
         ignore = label.data.cpu() == self.ignore_lb
+        label = label.clone()
         label[ignore] = 0
         lb_one_hot = torch.zeros_like(logits).scatter_(1, label.unsqueeze(1), 1)
         ignore = ignore.nonzero()
         _, M = ignore.size()
         a, *b = ignore.chunk(M, dim=1)
         lb_one_hot[[a, torch.arange(lb_one_hot.size(1)).long(), *b]] = 0
+        lb_one_hot = lb_one_hot.detach()
 
         # compute loss
         probs = torch.sigmoid(logits)
