@@ -24,6 +24,7 @@ class LabelSmoothSoftmaxCE(nn.Module):
         logs = self.log_softmax(logits)
         ignore = label.data.cpu() == self.lb_ignore
         n_valid = (ignore == 0).sum()
+        label = label.clone()
         label[ignore] = 0
         lb_one_hot = logits.data.clone().zero_().scatter_(1, label.unsqueeze(1), 1)
         label = self.lb_pos * lb_one_hot + self.lb_neg * (1-lb_one_hot)
