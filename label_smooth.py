@@ -28,15 +28,15 @@ class LabelSmoothSoftmaxCE(nn.Module):
         label[ignore] = 0
         lb_one_hot = logits.data.clone().zero_().scatter_(1, label.unsqueeze(1), 1)
         label = self.lb_pos * lb_one_hot + self.lb_neg * (1-lb_one_hot)
-        ignore = ignore.nonzero()
-        _, M = ignore.size()
-        a, *b = ignore.chunk(M, dim=1)
-        label[[a, torch.arange(label.size(1)), *b]] = 0
 
+        loss = -torch.sum(logs*label, dim=1)
+        loss[ignore] = 0
         if self.reduction == 'mean':
-            loss = -torch.sum(torch.sum(logs*label, dim=1)) / n_valid
+            loss = loss.sum() / n_valid
+        elif self.reduction == 'sum':
+            loss = loss.sum()
         elif self.reduction == 'none':
-            loss = -torch.sum(logs*label, dim=1)
+            loss = loss
         return loss
 
 
@@ -63,12 +63,13 @@ if __name__ == '__main__':
 
     import torch.nn.functional as F
     logits1 = net1(inten)
-    logits1 = F.interpolate(logits1, inten.size()[2:], mode='bilinear')
+    logits1 = F.interpolate(logits1, inten.size()[2:], mode='bilinear', align_corners=True)
     logits2 = net2(inten)
-    logits2 = F.interpolate(logits2, inten.size()[2:], mode='bilinear')
+    logits2 = F.interpolate(logits2, inten.size()[2:], mode='bilinear', align_corners=True)
 
     #  loss1 = criteria1(logits1, lbs)
     loss = criteria(logits1, lbs)
     #  print(loss.detach().cpu())
     loss.backward()
+    print(loss)
 
