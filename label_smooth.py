@@ -28,6 +28,7 @@ class LabelSmoothSoftmaxCE(nn.Module):
         label[ignore] = 0
         lb_one_hot = logits.data.clone().zero_().scatter_(1, label.unsqueeze(1), 1)
         label = self.lb_pos * lb_one_hot + self.lb_neg * (1-lb_one_hot)
+        label = label.detach()
 
         loss = -torch.sum(logs*label, dim=1)
         loss[ignore] = 0
