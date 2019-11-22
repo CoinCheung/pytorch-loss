@@ -1,6 +1,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class FocalLoss(nn.Module):
@@ -14,6 +15,7 @@ class FocalLoss(nn.Module):
         self.gamma = gamma
         self.reduction = reduction
         self.ignore_lb = ignore_lb
+        self.crit = nn.BCEWithLogitsLoss(reduction='none')
 
     def forward(self, logits, label):
         '''
@@ -21,32 +23,47 @@ class FocalLoss(nn.Module):
         args: label: tensor of shape(N, H, W)
         '''
         # overcome ignored label
-        ignore = label.data.cpu() == self.ignore_lb
-        n_valid = (ignore == 0).sum()
-        label[ignore] = 0
-
-        ignore = ignore.nonzero()
-        _, M = ignore.size()
-        a, *b = ignore.chunk(M, dim=1)
-        mask = torch.ones_like(logits)
-        mask[[a, torch.arange(mask.size(1)), *b]] = 0
+        with torch.no_grad():
+            label = label.clone().detach()
+            ignore = label == self.ignore_lb
+            n_valid = (ignore == 0).sum()
+            label[ignore] = 0
+            lb_one_hot = torch.zeros_like(logits).scatter_(
+                1, label.unsqueeze(1), 1).detach()
+            alpha = torch.empty_like(logits).fill_(1 - self.alpha)
+            alpha[lb_one_hot == 1] = self.alpha
 
         # compute loss
         probs = torch.sigmoid(logits)
-        lb_one_hot = logits.data.clone().zero_().scatter_(1, label.unsqueeze(1), 1)
-        pt = torch.where(lb_one_hot == 1, probs, 1-probs)
-        alpha = self.alpha*lb_one_hot + (1-self.alpha)*(1-lb_one_hot)
-        loss = -alpha*((1-pt)**self.gamma)*torch.log(pt + 1e-12)
-        loss[mask == 0] = 0
+        pt = torch.where(lb_one_hot == 1, probs, 1 - probs)
+        ce_loss = self.crit(logits, lb_one_hot)
+        loss = (alpha * torch.pow(1 - pt, self.gamma) * ce_loss).sum(dim=1)
+        loss[ignore == 1] = 0
         if self.reduction == 'mean':
-            loss = loss.sum(dim=1).sum()/n_valid
+            loss = loss.sum() / n_valid
+        if self.reduction == 'sum':
+            loss = loss.sum()
         return loss
 
+
 if __name__ == '__main__':
-    criteria = FocalLoss(alpha=1, gamma=2)
+    criteria1 = FocalLoss(alpha=1, gamma=2)
+    criteria2 = FocalLoss(alpha=1, gamma=2)
+    criteria3 = torch.nn.CrossEntropyLoss(ignore_index=255)
     logits = torch.randn(16, 19, 14, 14)
     label = torch.randint(0, 19, (16, 14, 14))
-    label[2, 3, 3] = 255
+    #  label[2, 3, 3] = 255
+    loss = criteria1(logits, label)
+    print(loss.item())
+    loss = criteria2(logits, label)
+    print(loss.item())
+    #  print(sigmoid_focal_loss(logits, label))
 
-    loss = criteria(logits, label)
-    print(loss)
+
+
+    #  loss = criteria1(logits, label)
+    #  print(loss.item())
+    #  loss = criteria1(logits, label)
+    #  print(loss.item())
+    #  loss = criteria2(logits, label)
+    #  print(loss.item())
