@@ -6,71 +6,142 @@ import torch
 import torch.nn as nn
 
 
-class LabelSmoothSoftmaxCE(nn.Module):
-    def __init__(self,
-                 lb_pos=0.9,
-                 lb_neg=0.005,
-                 reduction='mean',
-                 lb_ignore=255,
-                 ):
-        super(LabelSmoothSoftmaxCE, self).__init__()
-        self.lb_pos = lb_pos
-        self.lb_neg = lb_neg
+class LabelSmoothSoftmaxCEV1(nn.Module):
+
+    def __init__(self, lb_smooth=0.1, reduction='mean', lb_ignore=-100):
+        super(LabelSmoothSoftmaxCEV1, self).__init__()
+        self.lb_smooth = lb_smooth
         self.reduction = reduction
         self.lb_ignore = lb_ignore
-        self.log_softmax = nn.LogSoftmax(1)
+        self.log_softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, logits, label):
-        logs = self.log_softmax(logits)
-        ignore = label.data.cpu() == self.lb_ignore
-        n_valid = (ignore == 0).sum()
-        label = label.clone()
-        label[ignore] = 0
-        lb_one_hot = logits.data.clone().zero_().scatter_(1, label.unsqueeze(1), 1)
-        label = self.lb_pos * lb_one_hot + self.lb_neg * (1-lb_one_hot)
-        label = label.detach()
+        '''
+        args: logits: tensor of shape (N, C, H, W)
+        args: label: tensor of shape(N, H, W)
+        '''
+        # overcome ignored label
+        with torch.no_grad():
+            num_classes = logits.size(1)
+            label = label.clone().detach()
+            ignore = label == self.lb_ignore
+            n_valid = (ignore == 0).sum()
+            label[ignore] = 0
+            lb_pos, lb_neg = 1. - self.lb_smooth, self.lb_smooth / num_classes
+            label = torch.empty_like(logits).fill_(
+                lb_neg).scatter_(1, label.unsqueeze(1), lb_pos).detach()
 
-        loss = -torch.sum(logs*label, dim=1)
+        logs = self.log_softmax(logits)
+        loss = -torch.sum(logs * label, dim=1)
         loss[ignore] = 0
         if self.reduction == 'mean':
             loss = loss.sum() / n_valid
-        elif self.reduction == 'sum':
+        if self.reduction == 'sum':
             loss = loss.sum()
-        elif self.reduction == 'none':
-            loss = loss
+
         return loss
 
 
+
+class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, logits, label, lb_smooth, reduction, lb_ignore):
+        # prepare label
+        num_classes = logits.size(1)
+        label = label.clone().detach()
+        ignore = label == lb_ignore
+        n_valid = (ignore == 0).sum()
+        label[ignore] = 0
+        lb_pos, lb_neg = 1. - lb_smooth, lb_smooth / num_classes
+        label = torch.empty_like(logits).fill_(
+            lb_neg).scatter_(1, label.unsqueeze(1), lb_pos).detach()
+
+        scores = torch.softmax(logits, dim=1)
+        logs = torch.log(scores)
+
+        ctx.scores = scores
+        ctx.label = label
+        ctx.reduction = reduction
+        ctx.n_valid = n_valid
+
+        loss = -torch.sum(logs * label, dim=1)
+        loss[ignore] = 0
+        if reduction == 'mean':
+            loss = loss.sum() / n_valid
+        if reduction == 'sum':
+            loss = loss.sum()
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        scores = ctx.scores
+        label = ctx.label
+        reduction = ctx.reduction
+        n_valid = ctx.n_valid
+        grad = grad_output * (scores - label)
+        if reduction == 'mean':
+            grad /= n_valid
+        return grad, None, None, None, None, None
+
+
+class LabelSmoothSoftmaxCEV2(nn.Module):
+
+    def __init__(self, lb_smooth=0.1, reduction='mean', lb_ignore=-100):
+        super(LabelSmoothSoftmaxCEV2, self).__init__()
+        self.lb_smooth = lb_smooth
+        self.reduction = reduction
+        self.lb_ignore = lb_ignore
+
+    def forward(self, logits, label):
+        return LabelSmoothSoftmaxCEFunction.apply(
+                logits, label, self.lb_smooth, self.reduction, self.lb_ignore)
+
+
+
+
 if __name__ == '__main__':
+    import torchvision
+    import torch
+    import numpy as np
+    import random
     torch.manual_seed(15)
-    criteria = LabelSmoothSoftmaxCE(lb_pos=0.9, lb_neg=5e-3)
-    net1 = nn.Sequential(
-        nn.Conv2d(3, 3, kernel_size=3, stride=2, padding=1),
-    )
+    random.seed(15)
+    np.random.seed(15)
+    torch.backends.cudnn.deterministic = True
+    net1 = torchvision.models.resnet18(pretrained=True)
+    net2 = torchvision.models.resnet18(pretrained=True)
+    criteria1 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, lb_ignore=255)
+    criteria2 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, lb_ignore=255)
     net1.cuda()
-    net1.train()
-    net2 = nn.Sequential(
-        nn.Conv2d(3, 3, kernel_size=3, stride=2, padding=1),
-    )
     net2.cuda()
+    net1.train()
     net2.train()
+    criteria1.cuda()
+    criteria2.cuda()
 
-    with torch.no_grad():
-        inten = torch.randn(2, 3, 5, 5).cuda()
-        lbs = torch.randint(0, 3, [2, 5, 5]).cuda()
-        lbs[1, 3, 4] = 255
-        lbs[1, 2, 3] = 255
-        print(lbs)
+    optim1 = torch.optim.SGD(net1.parameters(), lr=1e-2)
+    optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
-    import torch.nn.functional as F
-    logits1 = net1(inten)
-    logits1 = F.interpolate(logits1, inten.size()[2:], mode='bilinear', align_corners=True)
-    logits2 = net2(inten)
-    logits2 = F.interpolate(logits2, inten.size()[2:], mode='bilinear', align_corners=True)
-
-    #  loss1 = criteria1(logits1, lbs)
-    loss = criteria(logits1, lbs)
-    #  print(loss.detach().cpu())
-    loss.backward()
-    print(loss)
-
+    for it in range(1000):
+        inten = torch.randn(16, 3, 224, 244).cuda()
+        inten[0, 1, 0, 0] = 255
+        lbs = torch.randint(0, 1000, (16, )).cuda()
+        logits = net1(inten)
+        loss1 = criteria1(logits, lbs)
+        optim1.zero_grad()
+        loss1.backward()
+        optim1.step()
+        #  print(net1.fc.weight[:, :5])
+        logits = net2(inten)
+        loss2 = criteria2(logits, lbs)
+        optim2.zero_grad()
+        loss2.backward()
+        optim2.step()
+        #  print(net2.fc.weight[:, :5])
+        if it % 50 == 0:
+            print(torch.sum(net1.fc.weight - net2.fc.weight))
+            print(loss1.item())
+            print(loss2.item())
+            print(loss1.item() - loss2.item())
+            print('===='*10)
