@@ -80,8 +80,12 @@ class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
         reduction = ctx.reduction
         n_valid = ctx.n_valid
         grad = grad_output * (scores - label)
-        if reduction == 'mean':
-            grad /= n_valid
+        if reduction == 'none':
+            grad = grad_output.unsqueeze(1) * (scores - label)
+        elif reduction == 'sum':
+            grad = grad_output * (scores - label)
+        elif reduction == 'mean':
+            grad = grad_output * (scores - label) / n_valid
         return grad, None, None, None, None, None
 
 
