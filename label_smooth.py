@@ -60,13 +60,18 @@ class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
         scores = torch.softmax(logits, dim=1)
         logs = torch.log(scores)
 
+        ignore = ignore.nonzero()
+        _, M = ignore.size()
+        a, *b = ignore.chunk(M, dim=1)
+        scores[[a, torch.arange(scores.size(1)), *b]] = 0
+        label[[a, torch.arange(label.size(1)), *b]] = 0
+
         ctx.scores = scores
         ctx.label = label
         ctx.reduction = reduction
         ctx.n_valid = n_valid
 
         loss = -torch.sum(logs * label, dim=1)
-        loss[ignore] = 0
         if reduction == 'mean':
             loss = loss.sum() / n_valid
         if reduction == 'sum':
@@ -79,13 +84,13 @@ class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
         label = ctx.label
         reduction = ctx.reduction
         n_valid = ctx.n_valid
-        grad = grad_output * (scores - label)
         if reduction == 'none':
             grad = grad_output.unsqueeze(1) * (scores - label)
         elif reduction == 'sum':
             grad = grad_output * (scores - label)
         elif reduction == 'mean':
-            grad = grad_output * (scores - label) / n_valid
+            grad_output /= n_valid
+            grad = grad_output * (scores - label)
         return grad, None, None, None, None, None
 
 
@@ -127,10 +132,13 @@ if __name__ == '__main__':
     optim1 = torch.optim.SGD(net1.parameters(), lr=1e-2)
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
-    for it in range(1000):
-        inten = torch.randn(16, 3, 224, 244).cuda()
+    bs = 128
+    for it in range(300000):
+        inten = torch.randn(bs, 3, 224, 244).cuda()
         inten[0, 1, 0, 0] = 255
-        lbs = torch.randint(0, 1000, (16, )).cuda()
+        inten[0, 0, 1, 2] = 255
+        inten[0, 2, 5, 28] = 255
+        lbs = torch.randint(0, 1000, (bs, )).cuda()
         logits = net1(inten)
         loss1 = criteria1(logits, lbs)
         optim1.zero_grad()
@@ -143,9 +151,12 @@ if __name__ == '__main__':
         loss2.backward()
         optim2.step()
         #  print(net2.fc.weight[:, :5])
-        if it % 50 == 0:
-            print(torch.sum(net1.fc.weight - net2.fc.weight))
-            print(loss1.item())
-            print(loss2.item())
-            print(loss1.item() - loss2.item())
-            print('===='*10)
+        with torch.no_grad():
+            if (it+1) % 50 == 0:
+                print('iter: {}, ================='.format(it+1))
+                #  print(net1.fc.weight.numel())
+                print(torch.mean(torch.abs(net1.fc.weight - net2.fc.weight)).item())
+                print(torch.mean(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
+                #  print(loss1.item())
+                #  print(loss2.item())
+                print(loss1.item() - loss2.item())
