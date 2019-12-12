@@ -1,6 +1,6 @@
 # pytorch-loss
 
-My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, triplet-loss, giou-loss, and dice-loss(both generalized soft dice loss and batch soft dice loss). Maybe this is useful in my future work.
+My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, triplet-loss, giou-loss, affinity-loss,and dice-loss(both generalized soft dice loss and batch soft dice loss). Maybe this is useful in my future work.
 
 
 Also tried to implement swish and mish activation functions.
