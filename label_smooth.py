@@ -58,7 +58,7 @@ class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
             lb_neg).scatter_(1, label.unsqueeze(1), lb_pos).detach()
 
         scores = torch.softmax(logits, dim=1)
-        logs = torch.log(scores)
+        logs = torch.log_softmax(logits, dim=1)
 
         ignore = ignore.nonzero()
         _, M = ignore.size()
