@@ -57,47 +57,52 @@ class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
         label = torch.empty_like(logits).fill_(
             lb_neg).scatter_(1, label.unsqueeze(1), lb_pos).detach()
 
-        scores = torch.softmax(logits, dim=1)
-        logs = torch.log_softmax(logits, dim=1)
-
         ignore = ignore.nonzero()
         _, M = ignore.size()
         a, *b = ignore.chunk(M, dim=1)
-        scores[[a, torch.arange(scores.size(1)), *b]] = 0
-        label[[a, torch.arange(label.size(1)), *b]] = 0
+        mask = [a, torch.arange(label.size(1)), *b]
+        label[mask] = 0
 
-        ctx.scores = scores
+        coeff = (num_classes - 1) * lb_neg + lb_pos
+        ctx.coeff = coeff
+        ctx.mask = mask
+        ctx.logits = logits
         ctx.label = label
         ctx.reduction = reduction
         ctx.n_valid = n_valid
 
-        loss = -torch.sum(logs * label, dim=1)
+        loss = torch.log_softmax(logits, dim=1).neg_().mul_(label).sum(dim=1)
         if reduction == 'mean':
-            loss = loss.sum() / n_valid
+            loss = loss.sum().div_(n_valid)
         if reduction == 'sum':
             loss = loss.sum()
         return loss
 
     @staticmethod
     def backward(ctx, grad_output):
-        scores = ctx.scores
+        coeff = ctx.coeff
+        mask = ctx.mask
+        logits = ctx.logits
         label = ctx.label
         reduction = ctx.reduction
         n_valid = ctx.n_valid
+
+        scores = torch.softmax(logits, dim=1).mul_(coeff)
+        scores[mask] = 0
         if reduction == 'none':
-            grad = grad_output.unsqueeze(1) * (scores - label)
+            grad = scores.sub_(label).mul_(grad_output.unsqueeze(1))
         elif reduction == 'sum':
-            grad = grad_output * (scores - label)
+            grad = scores.sub_(label).mul_(grad_output)
         elif reduction == 'mean':
-            grad_output /= n_valid
-            grad = grad_output * (scores - label)
+            grad = scores.sub_(label).mul_(grad_output.div_(n_valid))
         return grad, None, None, None, None, None
 
 
 class LabelSmoothSoftmaxCEV2(nn.Module):
+class LSRCrossEntropyLoss(nn.Module):
 
     def __init__(self, lb_smooth=0.1, reduction='mean', lb_ignore=-100):
-        super(LabelSmoothSoftmaxCEV2, self).__init__()
+        super(LSRCrossEntropyLoss, self).__init__()
         self.lb_smooth = lb_smooth
         self.reduction = reduction
         self.lb_ignore = lb_ignore
