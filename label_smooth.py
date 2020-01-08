@@ -6,10 +6,10 @@ import torch
 import torch.nn as nn
 
 
-class LabelSmoothSoftmaxCEV1(nn.Module):
+class LSRCrossEntropyLossV1(nn.Module):
 
     def __init__(self, lb_smooth=0.1, reduction='mean', lb_ignore=-100):
-        super(LabelSmoothSoftmaxCEV1, self).__init__()
+        super(LSRCrossEntropyLossV1, self).__init__()
         self.lb_smooth = lb_smooth
         self.reduction = reduction
         self.lb_ignore = lb_ignore
@@ -43,7 +43,7 @@ class LabelSmoothSoftmaxCEV1(nn.Module):
 
 
 
-class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
+class LSRCrossEntropyFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, logits, label, lb_smooth, reduction, lb_ignore):
@@ -98,17 +98,16 @@ class LabelSmoothSoftmaxCEFunction(torch.autograd.Function):
         return grad, None, None, None, None, None
 
 
-class LabelSmoothSoftmaxCEV2(nn.Module):
-class LSRCrossEntropyLoss(nn.Module):
+class LSRCrossEntropyLossV2(nn.Module):
 
     def __init__(self, lb_smooth=0.1, reduction='mean', lb_ignore=-100):
-        super(LSRCrossEntropyLoss, self).__init__()
+        super(LSRCrossEntropyLossV2, self).__init__()
         self.lb_smooth = lb_smooth
         self.reduction = reduction
         self.lb_ignore = lb_ignore
 
     def forward(self, logits, label):
-        return LabelSmoothSoftmaxCEFunction.apply(
+        return LSRCrossEntropyFunction.apply(
                 logits, label, self.lb_smooth, self.reduction, self.lb_ignore)
 
 
@@ -125,8 +124,8 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     net1 = torchvision.models.resnet18(pretrained=True)
     net2 = torchvision.models.resnet18(pretrained=True)
-    criteria1 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, lb_ignore=255)
-    criteria2 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, lb_ignore=255)
+    criteria1 = LSRCrossEntropyLossV1(lb_smooth=0.1, lb_ignore=255)
+    criteria2 = LSRCrossEntropyLossV2(lb_smooth=0.1, lb_ignore=255)
     net1.cuda()
     net2.cuda()
     net1.train()
