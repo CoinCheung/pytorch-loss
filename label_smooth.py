@@ -6,7 +6,11 @@ import torch
 import torch.nn as nn
 
 
+
 class LabelSmoothSoftmaxCEV1(nn.Module):
+    '''
+    This is the autograd version, you can also try the LabelSmoothSoftmaxCEV2 that uses derived gradients
+    '''
 
     def __init__(self, lb_smooth=0.1, reduction='mean', ignore_index=-100):
         super(LabelSmoothSoftmaxCEV1, self).__init__()
