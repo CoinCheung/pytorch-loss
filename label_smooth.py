@@ -6,13 +6,13 @@ import torch
 import torch.nn as nn
 
 
-class LSRCrossEntropyLossV1(nn.Module):
+class LabelSmoothSoftmaxCEV1(nn.Module):
 
-    def __init__(self, lb_smooth=0.1, reduction='mean', lb_ignore=-100):
-        super(LSRCrossEntropyLossV1, self).__init__()
+    def __init__(self, lb_smooth=0.1, reduction='mean', ignore_index=-100):
+        super(LabelSmoothSoftmaxCEV1, self).__init__()
         self.lb_smooth = lb_smooth
         self.reduction = reduction
-        self.lb_ignore = lb_ignore
+        self.lb_ignore = ignore_index
         self.log_softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, logits, label):
@@ -98,13 +98,13 @@ class LSRCrossEntropyFunction(torch.autograd.Function):
         return grad, None, None, None, None, None
 
 
-class LSRCrossEntropyLossV2(nn.Module):
+class LabelSmoothSoftmaxCEV2(nn.Module):
 
-    def __init__(self, lb_smooth=0.1, reduction='mean', lb_ignore=-100):
-        super(LSRCrossEntropyLossV2, self).__init__()
+    def __init__(self, lb_smooth=0.1, reduction='mean', ignore_index=-100):
+        super(LabelSmoothSoftmaxCEV2, self).__init__()
         self.lb_smooth = lb_smooth
         self.reduction = reduction
-        self.lb_ignore = lb_ignore
+        self.lb_ignore = ignore_index
 
     def forward(self, logits, label):
         return LSRCrossEntropyFunction.apply(
@@ -124,8 +124,8 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     net1 = torchvision.models.resnet18(pretrained=True)
     net2 = torchvision.models.resnet18(pretrained=True)
-    criteria1 = LSRCrossEntropyLossV1(lb_smooth=0.1, lb_ignore=255)
-    criteria2 = LSRCrossEntropyLossV2(lb_smooth=0.1, lb_ignore=255)
+    criteria1 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, lb_ignore=255)
+    criteria2 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, lb_ignore=255)
     net1.cuda()
     net2.cuda()
     net1.train()
