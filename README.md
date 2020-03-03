@@ -5,5 +5,7 @@ My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, tripl
 
 Also tried to implement swish and mish activation functions.
 
+Additionally, one-hot function is added.
+
 
 For those who happen to find this repo, if you see errors in my code, feel free to open an issue to correct me.
