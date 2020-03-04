@@ -25,6 +25,7 @@ class LabelSmoothSoftmaxCEV1(nn.Module):
         args: label: tensor of shape(N, H, W)
         '''
         # overcome ignored label
+        logits = logits.float() # use fp32 to avoid nan
         with torch.no_grad():
             num_classes = logits.size(1)
             label = label.clone().detach()
@@ -128,8 +129,8 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     net1 = torchvision.models.resnet18(pretrained=True)
     net2 = torchvision.models.resnet18(pretrained=True)
-    criteria1 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, lb_ignore=255)
-    criteria2 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, lb_ignore=255)
+    criteria1 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, ignore_index=255)
+    criteria2 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, ignore_index=255)
     net1.cuda()
     net2.cuda()
     net1.train()

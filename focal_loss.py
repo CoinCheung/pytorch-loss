@@ -23,6 +23,7 @@ class FocalLoss(nn.Module):
         '''
 
         # compute loss
+        logits = logits.float() # use fp32 if logits is fp16
         with torch.no_grad():
             alpha = torch.empty_like(logits).fill_(1 - self.alpha)
             alpha[label == 1] = self.alpha

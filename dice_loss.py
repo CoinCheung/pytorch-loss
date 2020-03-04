@@ -26,6 +26,7 @@ class GeneralizedSoftDiceLoss(nn.Module):
         args: label: tensor of shape(N, H, W)
         '''
         # overcome ignored label
+        logits = logits.float()
         ignore = label.data.cpu() == self.ignore_lb
         label = label.clone()
         label[ignore] = 0
@@ -70,6 +71,7 @@ class BatchSoftDiceLoss(nn.Module):
         args: label: tensor of shape(N, H, W)
         '''
         # overcome ignored label
+        logits = logits.float()
         ignore = label.data.cpu() == self.ignore_lb
         label = label.clone()
         label[ignore] = 0
