@@ -7,5 +7,7 @@ Also tried to implement swish and mish activation functions.
 
 Additionally, one-hot function is added.
 
+Newly add an "Exponential Moving Average(EMA)" operator.
+
 
 For those who happen to find this repo, if you see errors in my code, feel free to open an issue to correct me.
