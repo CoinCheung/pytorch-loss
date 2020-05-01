@@ -123,7 +123,7 @@ class FocalLossV2(nn.Module):
 
 ##
 # version 3: implement wit cpp/cuda to save memory and accelerate
-import pytorch_loss
+import focal_cpp # import torch before import cpp extension
 class FocalSigmoidLossFuncV3(torch.autograd.Function):
     '''
     use cpp/cuda to accelerate and shrink memory usage
@@ -131,7 +131,7 @@ class FocalSigmoidLossFuncV3(torch.autograd.Function):
     @staticmethod
     def forward(ctx, logits, labels, alpha, gamma):
         logits = logits.float()
-        loss = pytorch_loss.focalloss_forward(logits, labels, gamma, alpha)
+        loss = focal_cpp.focalloss_forward(logits, labels, gamma, alpha)
         ctx.variables = logits, labels, alpha, gamma
         return loss
 
@@ -141,7 +141,7 @@ class FocalSigmoidLossFuncV3(torch.autograd.Function):
         compute gradient of focal loss
         '''
         logits, labels, alpha, gamma = ctx.variables
-        grads = pytorch_loss.focalloss_backward(grad_output, logits, labels, gamma, alpha)
+        grads = focal_cpp.focalloss_backward(grad_output, logits, labels, gamma, alpha)
         return grads, None, None, None
 
 
