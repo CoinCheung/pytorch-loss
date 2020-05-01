@@ -19,7 +19,7 @@ class MishV1(nn.Module):
 
 
 ##
-# version 1: use derived formula to compute grad
+# version 2: use derived formula to compute grad
 class MishFunctionV2(torch.autograd.Function):
 
     @staticmethod
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     net2.cuda()
     opt1 = torch.optim.SGD(net1.parameters(), lr=1e-1)
     opt2 = torch.optim.SGD(net2.parameters(), lr=1e-1)
-    bs = 2
+    bs = 32
     for i in range(2000):
         inten = torch.randn(bs, 3, 224, 224).cuda().detach()
         label = torch.randint(0, 10, (bs, )).cuda().detach()

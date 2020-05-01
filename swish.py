@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 
 
-## use autograd
+##
+# version 1: use pytorch autograd
 class SwishV1(nn.Module):
 
     def __init__(self):
@@ -16,7 +17,8 @@ class SwishV1(nn.Module):
         return feat * torch.sigmoid(feat)
 
 
-## use self-computed back-propagation, use less memory and faster
+##
+# version 2: use derived formula to compute grad
 class SwishFunction(torch.autograd.Function):
 
     @staticmethod
@@ -43,11 +45,35 @@ class SwishV2(nn.Module):
         return SwishFunction.apply(feat)
 
 
+##
+# version 3: write with cuda which requires less memory and can be faster
+import swish_cpp
+class SwishFunctionV3(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, feat):
+        ctx.feat = feat
+        return swish_cpp.swish_forward(feat)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        feat = ctx.feat
+        return swish_cpp.swish_backward(grad_output, feat)
+
+
+class SwishV3(nn.Module):
+
+    def __init__(self):
+        super(SwishV3, self).__init__()
+
+    def forward(self, feat):
+        return SwishFunctionV3.apply(feat)
+
+
 if __name__ == "__main__":
     import torchvision
     net = torchvision.models.resnet50(pretrained=True)
     sd = {k: v for k, v in net.state_dict().items() if k.startswith('conv1.') or k.startswith('bn1.')}
-    print(sd)
 
     class Net(nn.Module):
         def __init__(self, act='swishv1'):
@@ -55,9 +81,11 @@ if __name__ == "__main__":
             self.conv1 = nn.Conv2d(3, 64, 7, 2, 3)
             self.bn1 = nn.BatchNorm2d(64)
             if act == 'swishv1':
-                self.act = SwishV1()
-            else:
-                self.act = SwishV2()
+                self.act1 = SwishV1()
+            elif act == 'swishv2':
+                self.act1 = SwishV2()
+            elif act == 'swishv3':
+                self.act1 = SwishV3()
             self.dense = nn.Linear(64, 10, bias=False)
             self.crit = nn.CrossEntropyLoss()
             state = self.state_dict()
@@ -67,19 +95,23 @@ if __name__ == "__main__":
         def forward(self, feat, label):
             feat = self.conv1(feat)
             feat = self.bn1(feat)
-            feat = self.act(feat)
+            feat = self.act1(feat)
             feat = torch.mean(feat, dim=(2, 3))
             logits = self.dense(feat)
             loss = self.crit(logits, label)
             return loss
 
     net1 = Net(act='swishv1')
-    net2 = Net(act='swishv2')
+    net2 = Net(act='swishv3')
+    net2.load_state_dict(net1.state_dict())
+    net1.cuda()
+    net2.cuda()
     opt1 = torch.optim.SGD(net1.parameters(), lr=1e-3)
     opt2 = torch.optim.SGD(net2.parameters(), lr=1e-3)
-    for i in range(10):
-        inten = torch.randn(16, 3, 512, 512).detach()
-        label = torch.randint(0, 10, (16, )).detach()
+    bs = 32
+    for i in range(10000):
+        inten = torch.randn(bs, 3, 224, 224).cuda().detach()
+        label = torch.randint(0, 10, (bs, )).cuda().detach()
 
         loss1 = net1(inten, label)
         opt1.zero_grad()
@@ -91,7 +123,11 @@ if __name__ == "__main__":
         loss2.backward()
         opt2.step()
 
-        print(loss1.item() - loss2.item())
+        if i % 200 == 0:
+            print('====')
+            print('loss diff: ', loss1.item() - loss2.item())
+            print('weight diff: ', torch.sum(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
+
 
 
 
