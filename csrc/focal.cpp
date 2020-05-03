@@ -18,7 +18,7 @@ at::Tensor FocalLoss_forward(const at::Tensor &logits,
                              const at::Tensor &labels,
                              const float gamma,
                              const float alpha) {
-    if (!logits.type().is_cuda()) {
+    if (!logits.type().is_cuda() || !labels.type().is_cuda()) {
         AT_ERROR("this focal loss only support gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());
