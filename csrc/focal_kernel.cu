@@ -20,14 +20,15 @@ __global__ void FocalLossForward(const int nthreads,
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
     for (int i{tid}; i < nthreads; i+=stride) {
-        scalar_t prob = 1. / (1. + expf(-logits[i]));
+        scalar_t lgt = logits[i];
+        scalar_t prob = 1. / (1. + expf(-lgt));
         scalar_t log_p, log_1_p;
-        if (logits[i] >= 0) {
-            log_p = -logf(1. + expf(-logits[i]));
-            log_1_p = -logits[i] + log_p;
+        if (lgt >= 0) {
+            log_p = -logf(1. + expf(-lgt));
+            log_1_p = -lgt + log_p;
         } else {
-            log_1_p = -logf(1. + expf(logits[i]));
-            log_p = logits[i] + log_1_p;
+            log_1_p = -logf(1. + expf(lgt));
+            log_p = lgt + log_1_p;
         }
         scalar_t term1 = powf(1. - prob, gamma) * log_p;
         scalar_t term2 = powf(prob, gamma) * log_1_p;
@@ -45,14 +46,15 @@ __global__ void FocalLossBackward(const int nthreads,
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
     for (int i{tid}; i < nthreads; i+=stride) {
-        scalar_t prob = 1. / (1. + expf(-logits[i]));
+        scalar_t lgt = logits[i];
+        scalar_t prob = 1. / (1. + expf(-lgt));
         scalar_t log_p, log_1_p;
-        if (logits[i] >=0) {
-            log_p = -logf(1. + expf(-logits[i]));
-            log_1_p = -logits[i] + log_p;
+        if (lgt >=0) {
+            log_p = -logf(1. + expf(-lgt));
+            log_1_p = -lgt + log_p;
         } else {
-            log_1_p = -logf(1. + expf(logits[i]));
-            log_p = logits[i] + log_1_p;
+            log_1_p = -logf(1. + expf(lgt));
+            log_p = lgt + log_1_p;
         }
         scalar_t term1 = powf(1. - prob, gamma) * (1. - prob - gamma * prob * log_p);
         scalar_t term2 = powf(prob, gamma) * (gamma * (1. - prob) * log_1_p - prob);

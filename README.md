@@ -9,5 +9,10 @@ Additionally, one-hot function is added.
 
 Newly add an "Exponential Moving Average(EMA)" operator.
 
+Some operators are implemented with pytorch cuda extension, if you want to try them, please make sure you compile it first: 
+```
+    $ python setup.py install
+```
+
 
 For those who happen to find this repo, if you see errors in my code, feel free to open an issue to correct me.

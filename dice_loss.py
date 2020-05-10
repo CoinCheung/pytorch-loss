@@ -7,100 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-## Soft Dice Loss for binary segmentation
-##
-# v1: pytorch autograd
-class SoftDiceLossV1(nn.Module):
-    '''
-    soft-dice loss, useful in binary segmentation
-    '''
-    def __init__(self,
-                 p=1,
-                 smooth=1,
-                 reduction='mean'):
-        super(SoftDiceLossV1, self).__init__()
-        self.p = p
-        self.smooth = smooth
-        self.reduction = reduction
-
-    def forward(self, logits, labels):
-        '''
-        args: logits: tensor of shape (N, H, W)
-        args: label: tensor of shape(N, H, W)
-        '''
-        probs = torch.sigmoid(logits)
-        numer = (probs * labels).sum(dim=(1, 2))
-        denor = (probs.pow(self.p) + labels).sum(dim=(1, 2))
-        loss = 1. - (2 * numer + self.smooth) / (denor + self.smooth)
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        elif self.reduction == 'sum':
-            loss = loss.sum()
-        return loss
-
-
-##
-# v2: self-derived grad formula
-class SoftDiceLossV2(nn.Module):
-    '''
-    soft-dice loss, useful in binary segmentation
-    '''
-    def __init__(self,
-                 p=1,
-                 smooth=1,
-                 reduction='mean'):
-        super(SoftDiceLossV2, self).__init__()
-        self.p = p
-        self.smooth = smooth
-        self.reduction = reduction
-
-    def forward(self, logits, labels):
-        '''
-        args: logits: tensor of shape (N, H, W)
-        args: label: tensor of shape(N, H, W)
-        '''
-        loss = SoftDiceLossV2Func.apply(logits, labels, self.p, self.smooth)
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        elif self.reduction == 'sum':
-            loss = loss.sum()
-        return loss
-
-
-class SoftDiceLossV2Func(torch.autograd.Function):
-    '''
-    compute backward directly for better numeric stability
-    '''
-    @staticmethod
-    def forward(ctx, logits, labels, p, smooth):
-        logits = logits.float()
-
-        probs = torch.sigmoid(logits)
-        numer = 2 * (probs * labels).sum(dim=(1, 2)) + smooth
-        denor = (probs.pow(p) + labels).sum(dim=(1, 2)) + smooth
-        loss = 1. - numer / denor
-
-        ctx.vars = probs, labels, numer, denor, p, smooth
-        return loss
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        '''
-        compute gradient of soft-dice loss
-        '''
-        probs, labels, numer, denor, p, smooth = ctx.vars
-
-        M = numer.view(-1, 1, 1) - (probs * labels).mul_(2)
-        N = denor.view(-1, 1, 1) - probs.pow(p)
-
-        mppi_1 = probs.pow(p - 1).mul_(p).mul_(M)
-        grads = torch.where(labels == 1,
-                probs.pow(p).mul_(2 * (1. - p)) - mppi_1 + N.mul_(2),
-                -mppi_1)
-        grads = grads.div_((probs.pow(p) + N).pow(2)).mul_(probs).mul_(1. - probs)
-        grads = grads.mul_(grad_output.view(-1, 1, 1)).neg_()
-        return grads, None, None, None
-
 
 class GeneralizedSoftDiceLoss(nn.Module):
 
@@ -233,7 +139,7 @@ if __name__ == '__main__':
     net2.load_state_dict(net1.state_dict())
 
     criteria1 = SoftDiceLossV1()
-    criteria2 = SoftDiceLossV2()
+    criteria2 = SoftDiceLossV3()
     net1.cuda()
     net2.cuda()
     net1.train()
@@ -258,6 +164,10 @@ if __name__ == '__main__':
         optim2.zero_grad()
         loss2.backward()
         optim2.step()
+        #  print('====')
+        #  print(loss1.item())
+        #  print(loss2.item())
+
         with torch.no_grad():
             if (it+1) % 50 == 0:
                 print('iter: {}, ================='.format(it+1))

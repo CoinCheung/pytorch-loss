@@ -19,6 +19,9 @@ setup(
         cpp_extension.CUDAExtension(
             'swish_cpp',
             ['csrc/swish_kernel.cu']),
+        cpp_extension.CUDAExtension(
+            'soft_dice_cpp',
+            ['csrc/soft_dice_kernel.cu']),
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension}
 )
