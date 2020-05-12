@@ -31,7 +31,18 @@ __global__ void compute_numer_denor(const int nthreads,
     int batch_size = gridDim.y;
     int sample_idx = blockIdx.y;
     int sample_size = nthreads / batch_size;
-    __shared__ scalar_t sdata[BLOCKSIZE * 2]; 
+/* 
+ *     Tips about shared memory:
+ *     1. torch will instantiate the template with three types: double, float, half;
+ *     2. these three types should not share same definitions of shared memory;
+ *     3. so one method is to use static shared memory with memory size explicitly assigned, and another method is to allocate shared memory with same raw type, such as unsigned char here, and then cast the pointer according to different template types
+ *  */
+    // method1: use static sized shared memory
+    // __shared__ scalar_t sdata[BLOCKSIZE * 2];
+    // method2: allocate with raw uchar type and then cast in different kernel
+    extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
+    scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
+
     sdata[threadIdx.x] = 0; // numer
     sdata[threadIdx.x + blockDim.x] = 0; // denor
     __syncthreads();
