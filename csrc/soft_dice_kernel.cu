@@ -59,11 +59,11 @@ __global__ void compute_numer_denor(const int nthreads,
 
     for (int s=1; s < blockDim.x; s*=2) {
         int idx = 2 * s * threadIdx.x;
-        if (idx < blockDim.x) {
+        if (idx < blockDim.x && idx + s < blockDim.x) {
             sdata[idx] += sdata[idx + s];
         }
         idx += blockDim.x;
-        if (idx < (blockDim.x + blockDim.x)) {
+        if (idx < (blockDim.x + blockDim.x) && idx + s < (blockDim.x + blockDim.x)) {
             sdata[idx] += sdata[idx + s];
         }
         __syncthreads();

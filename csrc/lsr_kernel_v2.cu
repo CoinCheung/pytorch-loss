@@ -43,23 +43,25 @@ __global__ void LSRLossForward(const int n_size,
         int m_idx = i % m_size;
         int64_t lb = labels[i];
         if (lb == ignore_index) {
-            if (tid == 0) losses[i] = 0;
             continue;
         } 
         // compute each element and add to shared memory
         for (int j{tid}; j < dimsize; j+=blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
+            scalar_t dval;
             if (j == lb) {
-                sdata[tid] += -log_scores[idx] * lb_pos;
+                dval = -log_scores[idx] * lb_pos;
+                sdata[tid] += dval;
             } else {
-                sdata[tid] += -log_scores[idx] * lb_neg;
+                dval = -log_scores[idx] * lb_neg;
+                sdata[tid] += dval;
             }
         }
         __syncthreads();
         // sum up 
         for (int s=1; s < blockDim.x; s*=2) {
             int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x) {
+            if (idx < blockDim.x && idx + s < blockDim.x) {
                 sdata[idx] += sdata[idx + s];
             }
             __syncthreads();
@@ -84,7 +86,8 @@ __global__ void LSRLossBackward(const int n_size,
     scalar_t lb_neg = smooth / dimsize;
     scalar_t sumy = lb_neg * (dimsize - 1) + lb_pos;
 
-    for (int i{bid}; i < n_size; i+=gridDim.x) {
+    int samplesize = n_size * m_size;
+    for (int i{bid}; i < samplesize; i+=gridDim.x) {
         int n_idx = i / m_size;
         int m_idx = i % m_size;
         int64_t lb{labels[i]};
