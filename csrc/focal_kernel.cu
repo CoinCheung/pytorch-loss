@@ -111,7 +111,7 @@ at::Tensor FocalLoss_backward_cuda(const at::Tensor &grad,
     AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
     // AT_ASSERTM(logits.size() == labels.size(), "should have same shape");
 
-    // allocate memory and cuda grid/block
+    /* allocate memory and cuda grid/block */
     auto grad_logits = at::empty_like(logits);
     const int num_samples = logits.numel();
     dim3 grid(std::min(

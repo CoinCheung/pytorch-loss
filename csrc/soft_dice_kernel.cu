@@ -157,10 +157,10 @@ at::Tensor SoftDice_forward_cuda(const at::Tensor &logits,
         THCudaCheck(cudaGetLastError());
         return losses;
     }
-    int shm_size = BLOCKSIZE * 16;
 
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "soft dice forward", [&] {
+        int shm_size = BLOCKSIZE * sizeof(scalar_t) * 2;
         compute_numer_denor<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
             logits.contiguous().data<scalar_t>(), 
@@ -207,10 +207,10 @@ at::Tensor SoftDice_backward_cuda(const at::Tensor &grad,
         THCudaCheck(cudaGetLastError());
         return grad_logits;
     }
-    int shm_size = BLOCKSIZE * 16;
 
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "soft dice backwrd", [&] {
+        int shm_size = BLOCKSIZE * sizeof(scalar_t) * 2;
         compute_numer_denor<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
             logits.contiguous().data<scalar_t>(), 

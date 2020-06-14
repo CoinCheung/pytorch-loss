@@ -22,6 +22,9 @@ setup(
         cpp_extension.CUDAExtension(
             'soft_dice_cpp',
             ['csrc/soft_dice_kernel.cu']),
+        cpp_extension.CUDAExtension(
+            'lsr_cpp',
+            ['csrc/lsr_kernel_v2.cu']),
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension}
 )
