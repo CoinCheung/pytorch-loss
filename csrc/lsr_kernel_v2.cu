@@ -43,11 +43,12 @@ __global__ void LSRLossForward(const int n_size,
         int m_idx = i % m_size;
         int64_t lb = labels[i];
         if (lb == ignore_index) {
+            if (tid == 0) losses[i] = 0;
             continue;
         } 
         // compute each element and add to shared memory
         for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t dval;
             if (j == lb) {
                 dval = -log_scores[idx] * lb_pos;
@@ -58,7 +59,7 @@ __global__ void LSRLossForward(const int n_size,
             }
         }
         __syncthreads();
-        // sum up 
+        // sum up
         for (int s=1; s < blockDim.x; s*=2) {
             int idx = 2 * s * threadIdx.x;
             if (idx < blockDim.x && idx + s < blockDim.x) {
@@ -66,7 +67,10 @@ __global__ void LSRLossForward(const int n_size,
             }
             __syncthreads();
         }
-        losses[i] = sdata[0];
+        if (tid == 0) losses[i] = sdata[0];
+
+        // int idx = n_idx * dimsize * m_size + lb * m_size + m_idx;
+        // if (tid == 0) losses[i] = -log_scores[idx];
     }
 }
 
@@ -101,6 +105,11 @@ __global__ void LSRLossBackward(const int n_size,
                 } else {
                     gradval -= lb_neg;
                 }
+
+                // gradval = scores[idx];
+                // if (j == lb) {
+                //     gradval -= 1.;
+                // }
             }
             grad_logits[idx] = gradval * grad[i];
         }
@@ -133,7 +142,6 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
         return losses;
     }
 
-    // cout << "call forward kernel\n";
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "lsr forward", [&] {
         int shm_size = BLOCKSIZE * sizeof(scalar_t) * 2; 

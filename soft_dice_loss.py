@@ -206,7 +206,8 @@ if __name__ == '__main__':
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
     bs = 12
-    for it in range(300000):
+    #  for it in range(300000):
+    for it in range(2):
         inten = torch.randn(bs, 3, 224, 244).cuda()
         lbs = torch.randint(0, 2, (bs, 224, 244)).cuda()
         logits = net1(inten).squeeze(1)

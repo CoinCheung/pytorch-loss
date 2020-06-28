@@ -188,7 +188,7 @@ if __name__ == '__main__':
     net2 = Model()
     net2.load_state_dict(net1.state_dict())
     red = 'mean'
-    criteria1 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, ignore_index=255, reduction=red)
+    criteria1 = LabelSmoothSoftmaxCEV3(lb_smooth=0.1, ignore_index=255, reduction=red)
     criteria2 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, ignore_index=255, reduction=red)
     net1.cuda()
     net2.cuda()
@@ -205,8 +205,8 @@ if __name__ == '__main__':
         inten = torch.randn(bs, 3, 224, 224).cuda()
         lbs = torch.randint(0, 19, (bs, 224, 224)).cuda()
         lbs[1, 1, 1] = 255
-        lbs[30, 3, 2] = 255
-        lbs[18, 4:7, 8] = 255
+        lbs[30, 3, 2:200] = 255
+        lbs[18, 4:7, 8:200] = 255
         logits = net1(inten)
         loss1 = criteria1(logits, lbs)
         optim1.zero_grad()

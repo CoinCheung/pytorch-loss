@@ -109,7 +109,8 @@ if __name__ == "__main__":
     opt1 = torch.optim.SGD(net1.parameters(), lr=1e-3)
     opt2 = torch.optim.SGD(net2.parameters(), lr=1e-3)
     bs = 32
-    for i in range(10000):
+    #  for i in range(10000):
+    for i in range(2):
         inten = torch.randn(bs, 3, 224, 224).cuda().detach()
         label = torch.randint(0, 10, (bs, )).cuda().detach()
 
@@ -128,6 +129,10 @@ if __name__ == "__main__":
             print('loss diff: ', loss1.item() - loss2.item())
             print('weight diff: ', torch.sum(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
 
+    from torch.autograd import gradcheck
+    inten = torch.randn(3, 4, 6, 6).cuda()
+    inten.requires_grad_(True)
+    gradcheck(SwishFunctionV3.apply, [inten, ])
 
 
 

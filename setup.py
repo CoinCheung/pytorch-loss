@@ -25,6 +25,9 @@ setup(
         cpp_extension.CUDAExtension(
             'lsr_cpp',
             ['csrc/lsr_kernel_v2.cu']),
+        cpp_extension.CUDAExtension(
+            'large_margin_cpp',
+            ['csrc/large_margin_kernel.cu']),
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension}
 )
