@@ -30,7 +30,6 @@ class LargeMarginSoftmaxV1(nn.Module):
         logits = logits.float()
         logits.retain_grad()
         logits.register_hook(lambda grad: grad)
-        #  n, c, h, w = logits.size()
         with torch.no_grad():
             num_classes = logits.size(1)
             coeff = 1. / (num_classes - 1.)
@@ -38,86 +37,26 @@ class LargeMarginSoftmaxV1(nn.Module):
             mask = label == self.ignore_index
             lb[mask] = 0
             idx = torch.zeros_like(logits).scatter_(1, lb.unsqueeze(1), 1.)
-            #  idx = torch.ones((n * h * w, c), dtype=torch.int32).detach()
-            #  idx = idx.to(logits.device).scatter_(1, lb.view(-1, 1), 0.)#.view(-1, c)
-            #  print(idx.size())
 
-        #  print(logits.size())
-        #  print(logits.permute(0, 2, 3, 1).size())
-
-        #  lgts = logits.clone()
-        #  lgts[idx.bool()] = -1.e6
         lgts = logits - idx * 1.e6
-        #  lgts.retain_grad()
-        #  lgts.register_hook(lambda grad: grad)
-
-        #  lgts = logits.permute(0, 2, 3, 1).view(-1, c)
-        #  lgts = lgts[idx.bool()].view(n, h, w, -1).permute(0, 3, 1, 2)
         q = lgts.softmax(dim=1)
         q = q * (1. - idx)
-        #  q.retain_grad()
-        #  q.register_hook(lambda grad: grad)
 
         log_q = lgts.log_softmax(dim=1)
         log_q = log_q * (1. - idx)
-        #  log_q.retain_grad()
-        #  log_q.register_hook(lambda grad: grad)
         mg_loss = ((q - coeff) * log_q) * (self.lam / 2)
-        #  mg_loss[idx.bool()] = 0
         mg_loss = mg_loss * (1. - idx)
-        #  print(mg_loss[0, :, 0, 0])
         mg_loss = mg_loss.sum(dim=1)
 
         ce_loss = self.ce_crit(logits, label)
         loss = ce_loss + mg_loss
         loss = loss[mask == 0]
 
-        #  print(label[0, 0, 0])
-        #  print(idx[0, :, 0, 0])
-        #  print(logits[0, :, 0, 0])
-        #  print(lgts[0, :, 0, 0])
-        #  max_lb = logits.max(dim=1)[0]
-        #  max_no_lb =lgts.max(dim=1)[0]
-        #  sum_lb = (logits - max_lb.unsqueeze(1)).exp().sum(dim=1)
-        #  sum_no_lb = (lgts - max_no_lb.unsqueeze(1)).exp().sum(dim=1)
-        #  print(max_no_lb[0, 0, 0])
-        #  print(max_lb[0, 0, 0])
-        #  print(sum_no_lb[0,0,0])
-        #  print(sum_lb[0,0,0])
-        #  print(q[0, :, 0, 0])
-        #  print(mg_loss[0, 0, 0])
-
-        #  print((logits - max_lb.unsqueeze(1))[0,0,0,0])
-        #  print((lgts - max_no_lb.unsqueeze(1)).exp()[0, 0, 0, 0])
-        #  print((lgts - max_no_lb.unsqueeze(1)).exp()[0, 1, 0, 0])
-        #  print(max_lb.size())
-
-        num = loss.numel()
-        print('num: ', num)
         if self.reduction == 'mean':
             loss = loss.mean()
         if self.reduction == 'sum':
             loss = loss.sum()
-        loss.backward()
 
-        #  qx = q * lgts
-        #  qx[idx.bool()] = 0
-        #  print('loss1')
-        #  print(qx[0, :, 0, 0])
-        #  print(qx.sum(dim=1).unsqueeze(1)[0, :, 0, 0])
-        #  print(logits.softmax(1)[0, :, 0, 0])
-        #  print(logits[0, :, 0, 0])
-        #  print(lgts.grad[0, :, 0, 0])
-        print('logits.grad1', logits.grad[0, :, 0, 0]*1000)
-        #  print(log_q.grad[0, :, 0, 0])
-        #  print(q.grad[0, :, 0, 0])
-        #  term = 0.5 * self.lam * (log_q + 1 - coeff / q) / num
-        #  term = 0.5 * self.lam * (log_q) / num
-        #  term = 0.5 * self.lam * (q - coeff) / num
-        ## grad of logits
-        #  term = logits.softmax(1) / num + lgts.grad
-        #  term[idx.bool()] -= 1 / num
-        #  print(term[0, :, 0, 0])
         return loss
 
 
@@ -146,7 +85,6 @@ class LargeMarginSoftmaxV2(nn.Module):
             loss = loss.mean()
         elif self.reduction == 'sum':
             loss = loss.sum()
-        loss.backward()
         return loss
 
 
@@ -156,14 +94,13 @@ class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
     def forward(ctx, logits, labels, lam=0.3):
         num_classes = logits.size(1)
         coeff = 1. / (num_classes - 1.)
-        lam = lam / 2
         idx = torch.zeros_like(logits).scatter_(1, labels.unsqueeze(1), 1.)
 
         lgts = logits.clone()
         lgts[idx.bool()] = -1.e6
         q = lgts.softmax(dim=1)
         log_q = lgts.log_softmax(dim=1)
-        losses = q.sub_(coeff).mul_(log_q).mul_(lam)
+        losses = q.sub_(coeff).mul_(log_q).mul_(lam / 2.)
         losses[idx.bool()] = 0
 
         losses = losses.sum(dim=1).add_(F.cross_entropy(logits, labels, reduction='none'))
@@ -171,109 +108,6 @@ class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
         ctx.variables = logits, labels, idx, coeff, lam
         return losses
 
-
-    #  @staticmethod
-    #  def backward(ctx, grad_output):
-    #      '''
-    #      compute gradient
-    #      '''
-    #      logits, labels, idx, coeff, lam = ctx.variables
-    #      num_classes = logits.size(1)
-    #
-    #      p = logits.softmax(dim=1)
-    #      lgts = logits.clone()
-    #      lgts[idx.bool()] = -1.e6
-    #      q = lgts.softmax(dim=1)
-    #      log_q = lgts.log_softmax(dim=1)
-    #      q_log_q = q * log_q
-    #      q_log_q[idx.bool()] = 0
-    #
-    #      #  grad = q_log_q + q - q_log_q.sum(dim=1).unsqueeze(1) - coeff
-    #      #  grad = grad * lam
-    #
-    #      grad = log_q + 1. - q_log_q.sum(dim=1).unsqueeze(1)
-    #      grad = grad * q - coeff
-    #      grad = grad * lam
-    #
-    #      print('loss2')
-    #      print(logits[0, :, 0, 0])
-    #
-    #      grad[idx.bool()] = -1
-    #      #  print(grad[0, :, 0, 0])
-    #      grad = grad + p
-    #      print((grad * grad_output.unsqueeze(1))[0, :, 0, 0])
-    #      p[idx.bool()] -= 1
-    #      print(p[0, :, 0, 0] / 1024)
-    #      print((p * grad_output.unsqueeze(1))[0, :, 0, 0])
-    #      #  print(grad[0, :, 0, 0])
-    #
-    #
-    #      #  grad.add_(p)
-    #
-    #      #  grad = (q * lgts).sum(dim=1).unsqueeze(1).neg_().add_(lgts).add_(1).mul_(q).sub_(coeff).mul_(lam).add_(p)
-    #      #  grads[idx.bool()] -= 1
-    #
-    #      grad.mul_(grad_output.unsqueeze(1))
-    #      print(grad[0, :, 0, 0])
-    #      #  print(grad_output.unsqueeze(1)[0, :, 0, 0].item())
-    #      #  print(grad[0, :, 0, 0])
-    #      return grad, None, None
-
-
-    #  @staticmethod
-    #  def backward(ctx, grad_output):
-    #      '''
-    #      compute gradient
-    #      '''
-    #      logits, labels, idx, coeff, lam = ctx.variables
-    #      num_classes = logits.size(1)
-    #
-    #      lgts = logits.clone()
-    #      lgts[idx.bool()] = -1.e6
-    #      q = lgts.softmax(dim=1)
-    #      log_q = lgts.log_softmax(dim=1)
-    #
-    #      s = (q * log_q)
-    #      s.add_(q)
-    #      s.sub_(coeff)
-    #      s[idx.bool()] = 0
-    #      s = s.sum(dim=1).unsqueeze(1)
-    #      #  print(s[0, :, 0, 0])
-    #
-    #      #  print(log_q[0, :, 0, 0])
-    #      grad = log_q + 1 - s
-    #      #  print(grad[0, :, 0, 0])
-    #      grad.mul_(q)
-    #      #  print(q[0, :, 0, 0])
-    #      #  print(grad[0, :, 0, 0])
-    #      grad.sub_(coeff)
-    #      #  print(grad[0, :, 0, 0])
-    #      grad.mul_(lam)
-    #      #  print(grad[0, :, 0, 0])
-    #
-    #      #
-    #      #  grad.mul_(q)
-    #      #  grad.add_(q)
-    #      #  grad.sub_(coeff)
-    #      #  q.mul_(s)
-    #      #  grad.sub_(q)
-    #      #  grad.mul_(lam)
-    #      grad[idx.bool()] = -1
-    #      #  print(grad[0, :, 0, 0])
-    #      p = logits.softmax(dim=1)
-    #      grad.add_(p)
-    #      #  print(grad[0, :, 0, 0])
-    #
-    #
-    #      #  grad.add_(p)
-    #
-    #      #  grad = (q * lgts).sum(dim=1).unsqueeze(1).neg_().add_(lgts).add_(1).mul_(q).sub_(coeff).mul_(lam).add_(p)
-    #      #  grads[idx.bool()] -= 1
-    #
-    #      grad.mul_(grad_output.unsqueeze(1))
-    #      #  print(grad_output.unsqueeze(1)[0, :, 0, 0].item())
-    #      #  print(grad[0, :, 0, 0])
-    #      return grad, None, None
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -288,11 +122,10 @@ class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
         lgts[idx.bool()] = -1.e6
         q = lgts.softmax(dim=1)
         qx = q * lgts
-        #  qx = q * lgts.max(dim=1, keepdim=True)[0]
         qx[idx.bool()] = 0
 
         grad = qx + q - q * qx.sum(dim=1).unsqueeze(1) - coeff
-        grad = grad * lam
+        grad = grad * lam / 2.
         grad[idx.bool()] = -1
         grad = grad + p
 
@@ -304,60 +137,61 @@ class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
 
 
 ##
+## NOTE: this is not verified and there is some error with this implementation
 # version 3: implement wit cpp/cuda to save memory and accelerate
-class LargeMarginSoftmaxV3(nn.Module):
-
-    def __init__(self, lam=0.3, reduction='mean', ignore_index=255):
-        super(LargeMarginSoftmaxV3, self).__init__()
-        self.reduction = reduction
-        self.ignore_index = ignore_index
-        self.lam = lam
-
-    def forward(self, logits, labels):
-        '''
-        args: logits: tensor of shape (N, C, H, W, ...)
-        args: label: tensor of shape(N, H, W, ...)
-        '''
-        logits = logits.float()
-        losses = LargeMarginSoftmaxFuncV3.apply(
-                logits, labels, self.lam, self.ignore_index)
-
-        #  logits.retain_grad()
-        #  logits.register_hook(lambda grad: grad)
-
-        if self.reduction == 'mean':
-            n_valid = (labels != self.ignore_index).sum()
-            losses = losses.sum() / n_valid
-        elif self.reduction == 'sum':
-            losses = losses.sum()
-        losses.backward()
-        #  print('logits.grad2', logits.grad[0, :, 0, 0]*1000)
-        return losses
-
-
-import large_margin_cpp
-class LargeMarginSoftmaxFuncV3(torch.autograd.Function):
-    '''
-    use cpp/cuda to accelerate and shrink memory usage
-    '''
-    @staticmethod
-    def forward(ctx, logits, labels, lam=0.3, ignore_index=255):
-        losses = large_margin_cpp.l_margin_forward(logits, labels, lam, ignore_index)
-
-        ctx.variables = logits, labels, lam, ignore_index
-        return losses
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        '''
-        compute gradient
-        '''
-        logits, labels, lam, ignore_index = ctx.variables
-        grads = large_margin_cpp.l_margin_backward(
-                grad_output, logits, labels, lam, ignore_index)
-        print(grads[0, :, 0, 0])
-
-        return grads, None, None, None
+#  class LargeMarginSoftmaxV3(nn.Module):
+#
+#      def __init__(self, lam=0.3, reduction='mean', ignore_index=255):
+#          super(LargeMarginSoftmaxV3, self).__init__()
+#          self.reduction = reduction
+#          self.ignore_index = ignore_index
+#          self.lam = lam
+#
+#      def forward(self, logits, labels):
+#          '''
+#          args: logits: tensor of shape (N, C, H, W, ...)
+#          args: label: tensor of shape(N, H, W, ...)
+#          '''
+#          logits = logits.float()
+#          losses = LargeMarginSoftmaxFuncV3.apply(
+#                  logits, labels, self.lam, self.ignore_index)
+#
+#          #  logits.retain_grad()
+#          #  logits.register_hook(lambda grad: grad)
+#
+#          if self.reduction == 'mean':
+#              n_valid = (labels != self.ignore_index).sum()
+#              losses = losses.sum() / n_valid
+#          elif self.reduction == 'sum':
+#              losses = losses.sum()
+#          losses.backward()
+#          #  print('logits.grad2', logits.grad[0, :, 0, 0]*1000)
+#          return losses
+#
+#
+#  import large_margin_cpp
+#  class LargeMarginSoftmaxFuncV3(torch.autograd.Function):
+#      '''
+#      use cpp/cuda to accelerate and shrink memory usage
+#      '''
+#      @staticmethod
+#      def forward(ctx, logits, labels, lam=0.3, ignore_index=255):
+#          losses = large_margin_cpp.l_margin_forward(logits, labels, lam, ignore_index)
+#
+#          ctx.variables = logits, labels, lam, ignore_index
+#          return losses
+#
+#      @staticmethod
+#      def backward(ctx, grad_output):
+#          '''
+#          compute gradient
+#          '''
+#          logits, labels, lam, ignore_index = ctx.variables
+#          grads = large_margin_cpp.l_margin_backward(
+#                  grad_output, logits, labels, lam, ignore_index)
+#          print(grads[0, :, 0, 0])
+#
+#          return grads, None, None, None
 
 
 
@@ -407,7 +241,7 @@ if __name__ == '__main__':
     #  criteria1 = nn.CrossEntropyLoss(reduction='mean')
     #  criteria2 = nn.CrossEntropyLoss(reduction='mean')
     criteria1 = LargeMarginSoftmaxV1(reduction='mean')
-    criteria2 = LargeMarginSoftmaxV3(reduction='mean')
+    criteria2 = LargeMarginSoftmaxV2(reduction='mean')
     net1.cuda()
     net2.cuda()
     net1.train()
