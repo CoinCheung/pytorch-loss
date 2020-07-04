@@ -18,6 +18,9 @@ using std::endl;
 
 #define BLOCKSIZE 512
 
+// TODO: 
+// 1. gridDim consider bother shm and sample numbers
+// 2. all loss change into compute gradient product outsize of kernel, do it in python side
 
 // kernel function for forward and backward
 template<typename scalar_t>
@@ -38,6 +41,12 @@ __global__ void LMarginLossForward(const int n_size,
     int tid = threadIdx.x;
     int bid = blockIdx.x;
     scalar_t coeff = 1. / (dimsize - 1);
+
+
+    // int tar = 10 * m_size + 1 * 16 + 12;
+    // if (bid == 0 && tid == 0) {
+    //     printf("%d, \n", tar);
+    // }
 
     int samplesize = n_size * m_size;
     for (int i{bid}; i < samplesize; i+=gridDim.x) {
@@ -69,7 +78,8 @@ __global__ void LMarginLossForward(const int n_size,
         if (tid == 0) {
             sdata[blockDim.x] = sdata[0]; // max logits without label
             sdata[blockDim.x + 1] = sdata[0]; // max logits with label
-            scalar_t dval = logits[lb];
+            int idx = n_idx * dimsize * m_size + lb * m_size + m_idx; 
+            scalar_t dval = logits[idx];
             if (dval > sdata[0]) sdata[blockDim.x + 1] = dval;
         }
 
@@ -112,16 +122,19 @@ __global__ void LMarginLossForward(const int n_size,
             sdata[blockDim.x + 3] = sdata[0]; // exp sum with label
         }
 
-        // if (i == 0 && tid == 0) {
-        //     for (int i {0}; i < dimsize; ++i) {
-        //         printf("%f, ", sdata[i]);
+        // if (i == tar && tid == 0) {
+        //     printf("sdata: ");
+        //     for (int ii{0}; ii < 4; ++ii) {
+        //         printf("%lf, ", sdata[blockDim.x + ii]);
         //     }
-        //     // printf("%f, %f, %f, %f\n",
-        //     //         sdata[blockDim.x + 0],
-        //     //         sdata[blockDim.x + 1],
-        //     //         sdata[blockDim.x + 2],
-        //     //         sdata[blockDim.x + 3]
-        //     //         );
+        //     printf("\n");
+        //     printf("logits:");
+        //     for (int ii{0}; ii < dimsize; ++ii) {
+        //         int idx = n_idx * dimsize * m_size + ii * m_size + m_idx;
+        //         scalar_t dval = logits[idx];
+        //         printf("%lf, ", dval);
+        //     }
+        //     printf("\n");
         // }
 
         // compute extra term
@@ -135,14 +148,8 @@ __global__ void LMarginLossForward(const int n_size,
                 term = -(dval - sdata[blockDim.x + 1]);
                 term += logf(sdata[blockDim.x + 3]);
             } else {
-                // if (i == 0) {
-                //     printf("dval: %f, ", dval);
-                // }
                 dval -= sdata[blockDim.x];
                 term = expf(dval) / sdata[blockDim.x + 2] - coeff;
-                // if (i == 0) {
-                //     printf("term: %f, coeff: %f, ", term, coeff);
-                // }
                 term *= (dval - logf(sdata[blockDim.x + 2]));
                 term *= lam / 2.;
             }
@@ -164,7 +171,6 @@ __global__ void LMarginLossForward(const int n_size,
 template<typename scalar_t>
 __global__ void LMarginLossBackward(const int n_size,
                             const int dimsize, const int m_size,
-                            const scalar_t *grad,
                             scalar_t *grad_logits,
                             const scalar_t *logits,
                             const int64_t *labels,
@@ -175,6 +181,11 @@ __global__ void LMarginLossBackward(const int n_size,
     int tid = threadIdx.x;
     int bid = blockIdx.x;
     scalar_t coeff = 1. / (dimsize - 1);
+
+    // int tar = 3 * m_size + 1 * 16 + 2;
+    // if (bid == 0 && tid == 0) {
+    //     printf("%d, \n", tar);
+    // }
 
     int samplesize = n_size * m_size;
     for (int i{bid}; i < samplesize; i+=gridDim.x) {
@@ -209,7 +220,8 @@ __global__ void LMarginLossBackward(const int n_size,
         if (tid == 0) {
             sdata[blockDim.x] = sdata[0]; // max logits without label
             sdata[blockDim.x + 1] = sdata[0]; // max logits with label
-            scalar_t dval = logits[lb];
+            int idx = n_idx * dimsize * m_size + lb * m_size + m_idx; 
+            scalar_t dval = logits[idx];
             if (dval > sdata[0]) sdata[blockDim.x + 1] = dval;
         }
 
@@ -252,6 +264,21 @@ __global__ void LMarginLossBackward(const int n_size,
             sdata[blockDim.x + 3] = sdata[0]; // exp sum with label
         }
 
+        // if (i == tar && tid == 0) {
+        //     printf("sdata: ");
+        //     for (int ii{0}; ii < 4; ++ii) {
+        //         printf("%lf, ", sdata[blockDim.x + ii]);
+        //     }
+        //     printf("\n");
+        //     printf("logits:");
+        //     for (int ii{0}; ii < dimsize; ++ii) {
+        //         int idx = n_idx * dimsize * m_size + ii * m_size + m_idx;
+        //         scalar_t dval = logits[idx];
+        //         printf("%lf, ", dval);
+        //     }
+        //     printf("\n");
+        // }
+
         // compute sum of q * x
         sdata[tid] = 0.;
         __syncthreads();
@@ -261,10 +288,11 @@ __global__ void LMarginLossBackward(const int n_size,
             scalar_t dval = logits[idx];
             scalar_t tmp = dval * expf(dval - sdata[blockDim.x]);
             sdata[tid] += tmp;
-            if (i == 0) {
-                if (tid == 0) printf("qx: ");
-                printf("%f, ", tmp / sdata[blockDim.x + 2]);
-            }
+            // if (i == tar) {
+            //     if (tid == 0) printf("qx: ");
+            //     printf("%f, ", tmp / sdata[blockDim.x + 2]);
+            //     if (tid == 0) printf("\n ");
+            // }
         }
         __syncthreads();
         for (int s=1; s < blockDim.x; s*=2) {
@@ -276,36 +304,68 @@ __global__ void LMarginLossBackward(const int n_size,
         }
         if (tid == 0) {
             sdata[blockDim.x + 4] = sdata[0] / sdata[blockDim.x + 2]; 
-            if (i == 0)
-            printf("\nsum of qx: %f\n", sdata[blockDim.x + 4]);
+            // if (i == tar && tid == 0)
+            // printf("\nsum of qx: %f\n", sdata[blockDim.x + 4]);
         }
         for (int j{tid}; j < dimsize; j+=blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
             scalar_t dval = logits[idx];
             scalar_t pc = expf(dval - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3];
-            if (i == 0) {
-                if (tid == 0) printf("p: ");
-                printf("%f, ", pc);
-            }
+            // if (i == tar) {
+            //     if (tid == 0) printf("pc, and dval: ");
+            //     printf("%f, ", pc);
+            //     printf("%f, ", dval);
+            //     if (tid == 0) printf("\n ");
+            // }
             scalar_t gval;
             if (j == lb) {
                 gval = pc - 1.;
             } else {
                 gval = dval - sdata[blockDim.x + 4] + 1.;
+                // if (i == tar) {
+                //     if (tid == 2) printf("gval: ");
+                //     printf("%f, ", gval);
+                //     if (tid == 2) printf("\n ");
+                // }
                 gval *= expf(dval - sdata[blockDim.x]) / sdata[blockDim.x + 2]; 
+                // if (i == tar) {
+                //     if (tid == 2) printf("gval: ");
+                //     printf("%f, ", gval);
+                //     if (tid == 2) printf("\n ");
+                // }
                 gval = pc + (gval - coeff) * lam / 2.;
+                // if (i == tar) {
+                //     if (tid == 2) printf("gval: ");
+                //     printf("%f, ", gval);
+                //     if (tid == 2) printf("\n ");
+                // }
             }
-            grad_logits[idx] = gval * grad[idx];
+            // if (i == tar) {
+            //     if (tid == 2) printf("idx: ");
+            //     printf("%d, ", idx);
+            //     if (tid == 2) printf("\n ");
+            // }
+            // if (i == tar) {
+            //     if (tid == 2) printf("grad[idx]: ");
+            //     printf("%f, ", grad[idx]);
+            //     if (tid == 2) printf("\n ");
+            // }
+            // if (i == tar) {
+            //     if (tid == 2) printf("grad_logits[i]: ");
+            //     printf("%f, ", grad_logits[i]);
+            //     if (tid == 2) printf("\n ");
+            // }
+            grad_logits[idx] = gval;
             // sdata[tid] += dval * expf(dval - sdata[blockDim.x]);
-            if (i == 0 && tid == 0) printf("\n gval: ");
-            if (i == 0) {
-                printf("%f, ", gval);
-            }
-            if (i == 0 && tid == 0) printf("\n grad_output: " );
-            if (i == 0 && tid == 0) {
-                printf("%f, ", grad[idx]);
-            }
-            if (i == 0 && tid == 0) printf("\n");
+            // if (i == 0 && tid == 0) printf("\n gval: ");
+            // if (i == 0) {
+            //     printf("%f, ", gval);
+            // }
+            // if (i == 0 && tid == 0) printf("\n grad_output: " );
+            // if (i == 0 && tid == 0) {
+            //     printf("%f, ", grad[idx]);
+            // }
+            // if (i == 0 && tid == 0) printf("\n");
         }
 
     }
@@ -326,26 +386,23 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
     const int m_size = logits.numel() / (n_size * dimsize);
     const int samplesize = labels.numel();
 
-    cout << "n_size: " << n_size << endl;
-    cout << "dimsize: " << dimsize << endl;
-    cout << "m_size: " << m_size << endl;
-
     // allocate memory and cuda grid/block
     auto losses = torch::empty_like(labels, logits.options());
-
-    dim3 grid1(std::min(samplesize, (int)4096));
-    dim3 block1(std::min(dimsize, (int)BLOCKSIZE));
     if (losses.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return losses;
     }
 
-    // cout << "call forward kernel\n";
+
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "large margin forward", [&] {
-        int shm_size = (std::min((int)BLOCKSIZE, dimsize) * 2 + 8) * sizeof(scalar_t); 
-        cout << "shm_size: " << shm_size << endl;
-        LMarginLossForward<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+        int blockdim = 32;
+        if (dimsize > 32) blockdim = 64;
+        dim3 block(blockdim);
+        int griddim = 48 * 1024 / sizeof(scalar_t) / blockdim;
+        dim3 grid(std::min(griddim, (int)samplesize));
+        int shm_size = (blockdim + 6) * sizeof(scalar_t); 
+        LMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             logits.contiguous().data<scalar_t>(), 
             labels.contiguous().data<int64_t>(), 
@@ -358,13 +415,11 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
 }
 
 
-at::Tensor large_margin_backward_cuda(const at::Tensor &grad,
-                                  const at::Tensor &logits,
+at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
                                   const at::Tensor &labels,
                                   const int64_t ignore_index,
                                   const float lam) {
     // CHECK type and shape
-    AT_ASSERTM(grad.type().is_cuda(), "grad should be cuda");
     AT_ASSERTM(logits.type().is_cuda(), "logits should be cuda");
     AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
 
@@ -375,20 +430,22 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &grad,
 
     // allocate memory and cuda grid/block
     auto grad_logits = torch::empty_like(logits);
-
-    dim3 grid(std::min(samplesize, (int)4096));
-    dim3 block(std::min(dimsize, (int)BLOCKSIZE));
     if (grad_logits.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return grad_logits;
     }
 
+
     // call kernel
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lsr backwrd", [&] {
-        int shm_size = (std::min((int)BLOCKSIZE, dimsize) * 2 + 8) * sizeof(scalar_t); 
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "large margin backwrd", [&] {
+        int blockdim = 32;
+        if (dimsize > 32) blockdim = 64;
+        dim3 block(blockdim);
+        int griddim = 48 * 1024 / sizeof(scalar_t) / blockdim;
+        dim3 grid(std::min(griddim, (int)samplesize));
+        int shm_size = (blockdim + 6) * sizeof(scalar_t); 
         LMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
-            grad.contiguous().data<scalar_t>(), 
             grad_logits.contiguous().data<scalar_t>(),
             logits.contiguous().data<scalar_t>(), 
             labels.contiguous().data<int64_t>(), 
@@ -412,8 +469,7 @@ at::Tensor large_margin_forward(const at::Tensor &logits,
 }
 
 
-at::Tensor large_margin_backward(const at::Tensor &grad,
-                                  const at::Tensor &logits,
+at::Tensor large_margin_backward(const at::Tensor &logits,
                                   const at::Tensor &labels,
                                   const float lam,
                                   const int64_t ignore_index) {
@@ -422,7 +478,7 @@ at::Tensor large_margin_backward(const at::Tensor &grad,
         AT_ERROR("this large margin loss only supports gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());
-    return large_margin_backward_cuda(grad, logits, labels, ignore_index, lam);
+    return large_margin_backward_cuda(logits, labels, ignore_index, lam);
 }
 
 

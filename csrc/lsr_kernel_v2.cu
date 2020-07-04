@@ -69,8 +69,6 @@ __global__ void LSRLossForward(const int n_size,
         }
         if (tid == 0) losses[i] = sdata[0];
 
-        // int idx = n_idx * dimsize * m_size + lb * m_size + m_idx;
-        // if (tid == 0) losses[i] = -log_scores[idx];
     }
 }
 
@@ -78,7 +76,6 @@ __global__ void LSRLossForward(const int n_size,
 template<typename scalar_t>
 __global__ void LSRLossBackward(const int n_size,
                             const int dimsize, const int m_size,
-                            const scalar_t *grad,
                             scalar_t *grad_logits,
                             const scalar_t *scores,
                             const int64_t *labels,
@@ -105,13 +102,8 @@ __global__ void LSRLossBackward(const int n_size,
                 } else {
                     gradval -= lb_neg;
                 }
-
-                // gradval = scores[idx];
-                // if (j == lb) {
-                //     gradval -= 1.;
-                // }
             }
-            grad_logits[idx] = gradval * grad[i];
+            grad_logits[idx] = gradval;
         }
     }
 }
@@ -144,8 +136,14 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
 
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "lsr forward", [&] {
-        int shm_size = BLOCKSIZE * sizeof(scalar_t) * 2; 
-        LSRLossForward<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+        int blockdim = 32;
+        if (dimsize > 32) blockdim = 64;
+        if (dimsize > 64) blockdim = 96;
+        dim3 block(blockdim);
+        int griddim = 48 * 1024 / sizeof(scalar_t) / blockdim;
+        dim3 grid(std::min(griddim, (int)samplesize));
+        int shm_size = blockdim * sizeof(scalar_t); 
+        LSRLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             log_scores.contiguous().data<scalar_t>(), 
             labels.contiguous().data<int64_t>(), 
@@ -158,13 +156,11 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
 }
 
 
-at::Tensor LSR_backward_cuda(const at::Tensor &grad,
-                                  const at::Tensor &logits,
-                                  const at::Tensor &labels,
-                                  const int64_t ignore_index,
-                                  const float smooth) {
+at::Tensor LSR_backward_cuda(const at::Tensor &logits,
+                              const at::Tensor &labels,
+                              const int64_t ignore_index,
+                              const float smooth) {
     // CHECK type and shape
-    AT_ASSERTM(grad.type().is_cuda(), "grad should be cuda");
     AT_ASSERTM(logits.type().is_cuda(), "logits should be cuda");
     AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
 
@@ -176,9 +172,6 @@ at::Tensor LSR_backward_cuda(const at::Tensor &grad,
     // allocate memory and cuda grid/block
     auto grad_logits = torch::empty_like(logits);
     auto scores = torch::softmax(logits, 1);
-
-    dim3 grid(std::min(samplesize, (int)4096));
-    dim3 block(std::min(dimsize, (int)BLOCKSIZE));
     if (grad_logits.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return grad_logits;
@@ -186,10 +179,14 @@ at::Tensor LSR_backward_cuda(const at::Tensor &grad,
 
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lsr backwrd", [&] {
-        int shm_size = BLOCKSIZE * sizeof(scalar_t) * 2; 
-        LSRLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+        int blockdim = 32;
+        if (dimsize > 32) blockdim = 64;
+        if (dimsize > 64) blockdim = 96;
+        dim3 block(blockdim);
+        dim3 grid(std::min(samplesize, (int)4096));
+
+        LSRLossBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
-            grad.contiguous().data<scalar_t>(), 
             grad_logits.contiguous().data<scalar_t>(),
             scores.contiguous().data<scalar_t>(), 
             labels.contiguous().data<int64_t>(), 
@@ -202,9 +199,9 @@ at::Tensor LSR_backward_cuda(const at::Tensor &grad,
 
 // python inferface
 at::Tensor LSR_forward(const at::Tensor &logits,
-                             const at::Tensor &labels,
-                             const int64_t ignore_index,
-                             const float smooth) {
+                         const at::Tensor &labels,
+                         const int64_t ignore_index,
+                         const float smooth) {
     if (!(logits.type().is_cuda() && labels.type().is_cuda())) {
         AT_ERROR("this LSR loss only supports gpu mode\n");
     } 
@@ -212,17 +209,16 @@ at::Tensor LSR_forward(const at::Tensor &logits,
     return LSR_forward_cuda(logits, labels, ignore_index, smooth);
 }
 
-at::Tensor LSR_backward(const at::Tensor &grad,
-                                  const at::Tensor &logits,
-                                  const at::Tensor &labels,
-                                  const int64_t ignore_index,
-                                  const float smooth) {
+at::Tensor LSR_backward(const at::Tensor &logits,
+                      const at::Tensor &labels,
+                      const int64_t ignore_index,
+                      const float smooth) {
     // TODO: try AT_ASSERTM
     if (!(logits.type().is_cuda() && labels.type().is_cuda())) {
         AT_ERROR("this LSR loss only supports gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());
-    return LSR_backward_cuda(grad, logits, labels, ignore_index, smooth);
+    return LSR_backward_cuda(logits, labels, ignore_index, smooth);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

@@ -125,7 +125,8 @@ class LSRCrossEntropyFunctionV3(torch.autograd.Function):
     def backward(ctx, grad_output):
         logits, labels, lb_ignore, lb_smooth = ctx.variables
 
-        grad = lsr_cpp.lsr_backward(grad_output, logits, labels, lb_ignore, lb_smooth)
+        grad = lsr_cpp.lsr_backward(logits, labels, lb_ignore, lb_smooth)
+        grad.mul_(grad_output.unsqueeze(1))
         return grad, None, None, None
 
 

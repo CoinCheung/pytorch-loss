@@ -135,63 +135,56 @@ class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
 
 
 
+#
+#  version 3: implement wit cpp/cuda to save memory and accelerate
+class LargeMarginSoftmaxV3(nn.Module):
 
-##
-## NOTE: this is not verified and there is some error with this implementation
-# version 3: implement wit cpp/cuda to save memory and accelerate
-#  class LargeMarginSoftmaxV3(nn.Module):
-#
-#      def __init__(self, lam=0.3, reduction='mean', ignore_index=255):
-#          super(LargeMarginSoftmaxV3, self).__init__()
-#          self.reduction = reduction
-#          self.ignore_index = ignore_index
-#          self.lam = lam
-#
-#      def forward(self, logits, labels):
-#          '''
-#          args: logits: tensor of shape (N, C, H, W, ...)
-#          args: label: tensor of shape(N, H, W, ...)
-#          '''
-#          logits = logits.float()
-#          losses = LargeMarginSoftmaxFuncV3.apply(
-#                  logits, labels, self.lam, self.ignore_index)
-#
-#          #  logits.retain_grad()
-#          #  logits.register_hook(lambda grad: grad)
-#
-#          if self.reduction == 'mean':
-#              n_valid = (labels != self.ignore_index).sum()
-#              losses = losses.sum() / n_valid
-#          elif self.reduction == 'sum':
-#              losses = losses.sum()
-#          losses.backward()
-#          #  print('logits.grad2', logits.grad[0, :, 0, 0]*1000)
-#          return losses
-#
-#
-#  import large_margin_cpp
-#  class LargeMarginSoftmaxFuncV3(torch.autograd.Function):
-#      '''
-#      use cpp/cuda to accelerate and shrink memory usage
-#      '''
-#      @staticmethod
-#      def forward(ctx, logits, labels, lam=0.3, ignore_index=255):
-#          losses = large_margin_cpp.l_margin_forward(logits, labels, lam, ignore_index)
-#
-#          ctx.variables = logits, labels, lam, ignore_index
-#          return losses
-#
-#      @staticmethod
-#      def backward(ctx, grad_output):
-#          '''
-#          compute gradient
-#          '''
-#          logits, labels, lam, ignore_index = ctx.variables
-#          grads = large_margin_cpp.l_margin_backward(
-#                  grad_output, logits, labels, lam, ignore_index)
-#          print(grads[0, :, 0, 0])
-#
-#          return grads, None, None, None
+    def __init__(self, lam=0.3, reduction='mean', ignore_index=255):
+        super(LargeMarginSoftmaxV3, self).__init__()
+        self.reduction = reduction
+        self.ignore_index = ignore_index
+        self.lam = lam
+
+    def forward(self, logits, labels):
+        '''
+        args: logits: tensor of shape (N, C, H, W, ...)
+        args: label: tensor of shape(N, H, W, ...)
+        '''
+        logits = logits.float()
+        losses = LargeMarginSoftmaxFuncV3.apply(
+                logits, labels, self.lam, self.ignore_index)
+
+        if self.reduction == 'mean':
+            n_valid = (labels != self.ignore_index).sum()
+            losses = losses.sum() / n_valid
+        elif self.reduction == 'sum':
+            losses = losses.sum()
+        return losses
+
+
+import large_margin_cpp
+class LargeMarginSoftmaxFuncV3(torch.autograd.Function):
+    '''
+    use cpp/cuda to accelerate and shrink memory usage
+    '''
+    @staticmethod
+    def forward(ctx, logits, labels, lam=0.3, ignore_index=255):
+        losses = large_margin_cpp.l_margin_forward(logits, labels, lam, ignore_index)
+
+        ctx.variables = logits, labels, lam, ignore_index
+        return losses
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        '''
+        compute gradient
+        '''
+        logits, labels, lam, ignore_index = ctx.variables
+        grads = large_margin_cpp.l_margin_backward(
+                logits, labels, lam, ignore_index)
+        grads.mul_(grad_output.unsqueeze(1))
+
+        return grads, None, None, None
 
 
 
@@ -241,7 +234,7 @@ if __name__ == '__main__':
     #  criteria1 = nn.CrossEntropyLoss(reduction='mean')
     #  criteria2 = nn.CrossEntropyLoss(reduction='mean')
     criteria1 = LargeMarginSoftmaxV1(reduction='mean')
-    criteria2 = LargeMarginSoftmaxV2(reduction='mean')
+    criteria2 = LargeMarginSoftmaxV3(reduction='mean')
     net1.cuda()
     net2.cuda()
     net1.train()
@@ -253,38 +246,32 @@ if __name__ == '__main__':
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
     bs = 32
-    for it in range(2):
+    for it in range(1000):
         inten = torch.randn(bs, 3, 256, 256).cuda()
         lbs = torch.randint(0, 3, (bs, 16, 16)).cuda()
-        lbs[16:, :, :] = 255
-        print('net1.weight: ', net1.out.weight[0, 0, :, 0])
-        optim1.zero_grad()
-        print('net1.weight: ', net1.out.weight[0, 0, :, 0])
+        lbs[16:, :, :10] = 255
+        #  s = lbs.cpu().detach().numpy()
+        #  np.save('../lb.npy', s)
         logits, feat = net1(inten.clone())
-        print('net1.weight: ', net1.out.weight[0, 0, :, 0])
-        print('logits1: ', logits[0, :, 0, 0])
         loss1 = criteria1(logits, lbs.clone())#.div(bs * 8 * 8)
-        print('feat8.grad1', feat.grad[0, :4, 0, 0])
-        #  loss1.backward()
-        #  print(logits.grad[0, :, 0, 0])
-        print('net1.weight: ', net1.out.weight[0, 0, :, 0])
+        optim1.zero_grad()
+        loss1.backward()
         optim1.step()
-        print('net1.weight: ', net1.out.weight[0, 0, :, 0])
-        print('net2.weight: ', net2.out.weight[0, 0, :, 0])
+        #  s = logits.cpu().detach().numpy()
+        #  np.save('../logitsv2.npy', s)
+
         logits, feat = net2(inten.clone())
-        print('logits2: ', logits[0, :, 0, 0])
-        print('net2.weight: ', net2.out.weight[0, 0, :, 0])
-        optim2.zero_grad()
-        print('net2.weight: ', net2.out.weight[0, 0, :, 0])
         loss2 = criteria2(logits, lbs.clone())#.div(bs * 8 * 8)
-        print('feat8.grad2', feat.grad[0, :4, 0, 0])
-        print('net2.weight: ', net2.out.weight[0, 0, :, 0])
-        #  loss2.backward()
+        optim2.zero_grad()
+        loss2.backward()
         optim2.step()
-        print('net2.weight: ', net2.out.weight[0, 0, :, 0])
+        #  s = logits.cpu().detach().numpy()
+        #  np.save('../logitsv3.npy', s)
+
+        #  print('net2.weight: ', net2.out.weight[0, 0, :, 0])
         #  net2.load_state_dict(net1.state_dict())
         with torch.no_grad():
-            if (it+1) % 1 == 0:
+            if (it+1) % 50 == 0:
             #  if True:
                 #  print(loss1.item())
                 #  print(loss2.item())
@@ -294,4 +281,4 @@ if __name__ == '__main__':
                 print('conv1.weight: ', torch.mean(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
                 #  print(net1.out.weight.mean().item())
                 #  print(net2.out.weight.mean().item())
-                #  print('\nloss: ', loss1.item() - loss2.item())
+                print('\nloss: ', loss1.item() - loss2.item())
