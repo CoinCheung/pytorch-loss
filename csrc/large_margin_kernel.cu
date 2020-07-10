@@ -19,8 +19,28 @@ using std::endl;
 #define BLOCKSIZE 512
 
 // TODO: 
-// 1. gridDim consider bother shm and sample numbers
-// 2. all loss change into compute gradient product outsize of kernel, do it in python side
+// at::numeric_limits<scalar_t>::lowest;
+// __forceinline__ __device__ can use threadIdx/blockIdx directly
+
+// implement like pytorch-softmax: two kernels: one is for inner size to be 1, and the other is for spatial. Besides, in the spatial kernel method, we should use threadIdx.x and threadIdx.y for dimsize and inner size parallelization
+// define spatial kernel block like this: 
+/* 
+ * inline dim3 SpatialSoftMax_getBlockSize(
+ *   uint64_t outer_size, uint64_t dim_size, uint64_t inner_size) {
+ *   uint32_t inner_threads = inner_size;
+const int max_threads = 1024;
+ *   inner_threads = std::min(inner_threads, static_cast<uint32_t>(max_threads));
+ *   uint32_t dim_threads = 1;
+ *   if (inner_threads <= 64 && dim_size >= 64) {
+ *     while (inner_threads * dim_threads <= max_threads && dim_threads <= dim_size)
+ *       dim_threads *= 2;
+ *     dim_threads /= 2;
+ *   }
+ *   return dim3(dim_threads, inner_threads);
+ * }
+ *  */
+// consider max_active_blocks when assign grid blocks, the total number of blocks should not be greater than max_active_blocks which is multiProcessCount
+// do not consider shm limits
 
 // kernel function for forward and backward
 template<typename scalar_t>
@@ -397,11 +417,14 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "large margin forward", [&] {
         int blockdim = 32;
-        if (dimsize > 32) blockdim = 64;
+        for (int i{0}; i < 5; ++i) {
+            if (blockdim < dimsize) blockdim *= 2;
+        }
+        // if (dimsize > 32) blockdim = 64;
         dim3 block(blockdim);
-        int griddim = 48 * 1024 / sizeof(scalar_t) / blockdim;
+        int griddim = 48 * 1024 / sizeof(scalar_t) / (blockdim + 6);
         dim3 grid(std::min(griddim, (int)samplesize));
-        int shm_size = (blockdim + 6) * sizeof(scalar_t); 
+        int shm_size = (blockdim + 6) * sizeof(scalar_t);
         LMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             logits.contiguous().data<scalar_t>(), 
@@ -439,9 +462,12 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "large margin backwrd", [&] {
         int blockdim = 32;
-        if (dimsize > 32) blockdim = 64;
+        for (int i{0}; i < 5; ++i) {
+            if (blockdim < dimsize) blockdim *= 2;
+        }
+        // if (dimsize > 32) blockdim = 64;
         dim3 block(blockdim);
-        int griddim = 48 * 1024 / sizeof(scalar_t) / blockdim;
+        int griddim = 48 * 1024 / sizeof(scalar_t) / (6 + blockdim);
         dim3 grid(std::min(griddim, (int)samplesize));
         int shm_size = (blockdim + 6) * sizeof(scalar_t); 
         LMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
