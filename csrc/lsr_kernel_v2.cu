@@ -19,6 +19,44 @@ using std::endl;
 #define BLOCKSIZE 512
 
 
+template<typename scalar_t>
+__forceinline__ __device__ void reduce_sum(scalar_t *sdata, int blocksize, int tid) {
+    __syncthreads();
+    // NOTE: block size should be 2 ** x
+    for (unsigned int s{blocksize / 2}; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+
+    // // reduce between warps
+    // if (blocksize >= 1024) {
+    //     if (tid < 512) sdata[tid] += sdata[tid + 512];
+    //     __syncthreads();
+    // }
+    // if (blocksize >= 512) {
+    //     if (tid < 256) sdata[tid] += sdata[tid + 256];
+    //     __syncthreads();
+    // }
+    // if (blocksize >= 256) {
+    //     if (tid < 128) sdata[tid] += sdata[tid + 128];
+    //     __syncthreads();
+    // }
+    // if (blocksize >= 128) {
+    //     if (tid < 64) sdata[tid] += sdata[tid + 64];
+    //     __syncthreads();
+    // }
+    // // reduce within warps
+    // if (tid < 32) {
+    //     if (blocksize >= 64) sdata[tid] += sdata[tid + 32];
+    //     if (blocksize >= 32) sdata[tid] += sdata[tid + 16];
+    //     if (blocksize >= 16) sdata[tid] += sdata[tid +  8];
+    //     if (blocksize >=  8) sdata[tid] += sdata[tid +  4];
+    //     if (blocksize >=  4) sdata[tid] += sdata[tid +  2];
+    //     if (blocksize >=  2) sdata[tid] += sdata[tid +  1];
+    // }
+}
+
+
 // kernel function for forward and backward
 template<typename scalar_t>
 __global__ void LSRLossForward(const int n_size,
@@ -28,47 +66,41 @@ __global__ void LSRLossForward(const int n_size,
                             scalar_t *losses,
                             const int64_t ignore_index, const float smooth) {
     // shared memory
-    __shared__ scalar_t sdata[BLOCKSIZE + 2];
+    extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
+    scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
+
+    int shm_offset = blockDim.x;
+    int sample_offset = gridDim.x * blockDim.y;
+    sdata = sdata + shm_offset * threadIdx.y;
 
     int tid = threadIdx.x;
-    int bid = blockIdx.x;
+    int sample_id = blockIdx.x * blockDim.y + threadIdx.y;
     scalar_t lb_pos = 1. - smooth;
     scalar_t lb_neg = smooth / dimsize;
-
     int samplesize = n_size * m_size;
-    for (int i{bid}; i < samplesize; i+=gridDim.x) {
-        sdata[tid] = 0;
-        __syncthreads();
+
+    for (int i{sample_id}; i < samplesize; i += sample_offset) {
         int n_idx = i / m_size;
         int m_idx = i % m_size;
         int64_t lb = labels[i];
+
         if (lb == ignore_index) {
             if (tid == 0) losses[i] = 0;
             continue;
-        } 
-        // compute each element and add to shared memory
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
-            scalar_t dval;
-            if (j == lb) {
-                dval = -log_scores[idx] * lb_pos;
-                sdata[tid] += dval;
-            } else {
-                dval = -log_scores[idx] * lb_neg;
-                sdata[tid] += dval;
-            }
         }
-        __syncthreads();
-        // sum up
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                sdata[idx] += sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) losses[i] = sdata[0];
 
+        sdata[tid] = 0;
+        __syncthreads();
+        for (int j{tid}; j < dimsize; j += blockDim.x) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            if (j == lb) {
+                sdata[tid] += -log_scores[idx] * lb_pos;
+            } else {
+                sdata[tid] += -log_scores[idx] * lb_neg;
+            }
+        }
+        reduce_sum<scalar_t>(sdata, blockDim.x, tid);
+        if (tid == 0) losses[i] = sdata[0];
     }
 }
 
@@ -81,30 +113,29 @@ __global__ void LSRLossBackward(const int n_size,
                             const int64_t *labels,
                             const int64_t ignore_index,
                             const float smooth) {
-    int tid = threadIdx.x;
-    int bid = blockIdx.x;
+    int tid = blockDim.x * blockIdx.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
     scalar_t lb_pos = 1. - smooth;
     scalar_t lb_neg = smooth / dimsize;
     scalar_t sumy = lb_neg * (dimsize - 1) + lb_pos;
 
-    int samplesize = n_size * m_size;
-    for (int i{bid}; i < samplesize; i+=gridDim.x) {
-        int n_idx = i / m_size;
-        int m_idx = i % m_size;
-        int64_t lb{labels[i]};
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t gradval = 0; 
-            if (lb != ignore_index) {
-                gradval = sumy * scores[idx];
-                if (j == lb) {
-                    gradval -= lb_pos;
-                } else {
-                    gradval -= lb_neg;
-                }
+    int samplesize = n_size * dimsize * m_size;
+    int n_offset = dimsize * m_size;
+    for (int i{tid}; i < samplesize; i += stride) {
+        int n_idx = i / n_offset;
+        int dim_idx = (i % n_offset) / m_size;
+        int m_idx = (i % n_offset) % m_size;
+        int64_t lb = labels[n_idx * m_size + m_idx];
+
+        scalar_t gradval = 0;
+        if (lb != ignore_index) {
+            if (lb == dim_idx) {
+                gradval = sumy * scores[i] - lb_pos;
+            } else {
+                gradval = sumy * scores[i] - lb_neg;
             }
-            grad_logits[idx] = gradval;
         }
+        grad_logits[i] = gradval;
     }
 }
 
@@ -126,23 +157,23 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
     // allocate memory and cuda grid/block
     auto losses = torch::zeros_like(labels, logits.options());
     auto log_scores = torch::log_softmax(logits, 1);
-
-    dim3 grid1(std::min(samplesize, (int)4096));
-    dim3 block1(std::min(dimsize, (int)BLOCKSIZE));
     if (losses.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return losses;
     }
 
+    int blockx = 32;
+    while (blockx < dimsize) blockx *= 2;
+    blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
+    int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
+    int gridx = std::min(4096, (int)(samplesize / blocky));
+    int n_shm = blockx * blocky;
+    dim3 block(blockx, blocky);
+    dim3 grid(gridx);
+
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "lsr forward", [&] {
-        int blockdim = 32;
-        if (dimsize > 32) blockdim = 64;
-        if (dimsize > 64) blockdim = 96;
-        dim3 block(blockdim);
-        int griddim = 48 * 1024 / sizeof(scalar_t) / blockdim;
-        dim3 grid(std::min(griddim, (int)samplesize));
-        int shm_size = blockdim * sizeof(scalar_t); 
+        int shm_size = n_shm * sizeof(scalar_t); 
         LSRLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             log_scores.contiguous().data<scalar_t>(), 
@@ -179,12 +210,8 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
 
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lsr backwrd", [&] {
-        int blockdim = 32;
-        if (dimsize > 32) blockdim = 64;
-        if (dimsize > 64) blockdim = 96;
-        dim3 block(blockdim);
-        dim3 grid(std::min(samplesize, (int)4096));
-
+        dim3 block(BLOCKSIZE);
+        dim3 grid(std::min((int)std::ceil(samplesize / BLOCKSIZE), (int)4096));
         LSRLossBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             grad_logits.contiguous().data<scalar_t>(),
