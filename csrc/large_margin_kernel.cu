@@ -16,11 +16,10 @@
 using std::cout;
 using std::endl;
 
-#define BLOCKSIZE 512
+#define BLOCKSIZE 1024
 
 // TODO: 
 // at::numeric_limits<scalar_t>::lowest;
-// __forceinline__ __device__ can use threadIdx/blockIdx directly
 
 // implement like pytorch-softmax: two kernels: one is for inner size to be 1, and the other is for spatial. Besides, in the spatial kernel method, we should use threadIdx.x and threadIdx.y for dimsize and inner size parallelization
 // define spatial kernel block like this: 
@@ -40,7 +39,106 @@ const int max_threads = 1024;
  * }
  *  */
 // consider max_active_blocks when assign grid blocks, the total number of blocks should not be greater than max_active_blocks which is multiProcessCount
-// do not consider shm limits
+
+
+template<typename scalar_t>
+__forceinline__ __device__ void reduce_max(scalar_t* sdata, int tid) {
+    __syncthreads();
+    for (unsigned int s{blockDim.x / 2}; s > 0; s >>= 1) {
+        if (tid < s) {
+            if (sdata[tid] < sdata[tid + s]) sdata[tid] = sdata[tid + s];
+        }
+        __syncthreads();
+    }
+}
+
+
+template<typename scalar_t>
+__forceinline__ __device__ void reduce_sum(scalar_t* sdata, int tid) {
+    __syncthreads();
+    for (unsigned int s{blockDim.x / 2}; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+}
+
+
+template<typename scalar_t>
+__forceinline__ __device__ void compute_reduce_values(
+        const scalar_t* logits, scalar_t* sdata,
+        const int dimsize, const int m_size, 
+        int n_idx, int m_idx, int64_t lb, int tid) {
+    // b is max logits without target 
+    // b+1 is max logits with target 
+    // b+2 is sum of exp without target 
+    // b+3 is sum of exp with target 
+
+    // compute max with and without label index
+    __syncthreads();
+    sdata[tid] = -1000;
+    __syncthreads();
+    for (int j{tid}; j < dimsize; j += blockDim.x) {
+        if (j == lb) continue;
+        int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+        scalar_t val = logits[idx];
+        if (val > sdata[tid]) sdata[tid] = val;
+    }
+    reduce_max(sdata, tid);
+    if (tid == 0) {
+        sdata[blockDim.x] = sdata[0];
+        sdata[blockDim.x + 1] = sdata[0];
+        int idx = n_idx * dimsize * m_size + lb * m_size + m_idx;
+        scalar_t val = logits[idx];
+        if (val > sdata[0]) sdata[blockDim.x + 1] = val;
+    }
+
+    // compute sum of exp with and without label index
+    sdata[tid] = 0.;
+    __syncthreads();
+    for (int j{tid}; j < dimsize; j += blockDim.x) {
+        if (j == lb) continue;
+        int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+        scalar_t val = logits[idx];
+        sdata[tid] += expf(val - sdata[blockDim.x]);
+    }
+    reduce_sum<scalar_t>(sdata, tid);
+    if (tid == 0) sdata[blockDim.x + 2] = sdata[0];
+
+    sdata[tid] = 0.;
+    __syncthreads();
+    for (int j{tid}; j < dimsize; j += blockDim.x) {
+        int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+        scalar_t val = logits[idx];
+        sdata[tid] += expf(val - sdata[blockDim.x + 1]);
+    }
+    reduce_sum<scalar_t>(sdata, tid);
+    if (tid == 0) sdata[blockDim.x + 3] = sdata[0];
+}
+
+
+template<typename scalar_t>
+__forceinline__ __device__ void compute_sum_of_qx(
+        const scalar_t* logits, scalar_t* sdata,
+        const int dimsize, const int m_size, 
+        int n_idx, int m_idx, int64_t lb, int tid) {
+    // compute sum of q * x to sdata[blockDim.x + 5]
+    __syncthreads();
+    sdata[tid] = 0.;
+    __syncthreads();
+    for (int j{tid}; j < dimsize; j += blockDim.x) {
+        if (j == lb) continue;
+        int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
+        scalar_t val = logits[idx];
+        sdata[tid] += val * expf(val - sdata[blockDim.x]);
+    }
+    reduce_sum<scalar_t>(sdata, tid);
+    if (tid == 0) {
+        sdata[blockDim.x + 5] = sdata[0] / sdata[blockDim.x + 2]; 
+    }
+}
+
 
 // kernel function for forward and backward
 template<typename scalar_t>
@@ -51,25 +149,21 @@ __global__ void LMarginLossForward(const int n_size,
                             scalar_t *losses,
                             const int64_t ignore_index, const float lam) {
     // shared memory
-    // b is max logits without target 
-    // b+1 is max logits with target 
-    // b+2 is sum of exp without target 
-    // b+3 is sum of exp with target 
+    // b+4 is coeff of 1/(dimsize - 1)
     extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
     scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
+    sdata = sdata + (blockDim.x + 8) * threadIdx.y;
 
     int tid = threadIdx.x;
-    int bid = blockIdx.x;
-    scalar_t coeff = 1. / (dimsize - 1);
+    int sample_id = blockIdx.x * blockDim.y + threadIdx.y;
+    int sample_offset = gridDim.x * blockDim.y;
 
-
-    // int tar = 10 * m_size + 1 * 16 + 12;
-    // if (bid == 0 && tid == 0) {
-    //     printf("%d, \n", tar);
-    // }
+    if (tid == 0) {
+        sdata[blockDim.x + 4] = 1. / (dimsize - 1);
+    }
 
     int samplesize = n_size * m_size;
-    for (int i{bid}; i < samplesize; i+=gridDim.x) {
+    for (int i{sample_id}; i < samplesize; i += sample_offset) {
         int64_t lb = labels[i];
         if (lb == ignore_index) {
             if (tid == 0) losses[i] = 0;
@@ -77,87 +171,9 @@ __global__ void LMarginLossForward(const int n_size,
         } 
         int n_idx = i / m_size;
         int m_idx = i % m_size;
+        compute_reduce_values<scalar_t>(logits, sdata,
+                dimsize, m_size, n_idx, m_idx, lb, tid);
 
-        // compute max value for each vector for softmax
-        sdata[tid] = -1000;
-        __syncthreads();
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            if (j == lb) continue;
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            if (dval > sdata[tid]) sdata[tid] = dval;
-        }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                if (sdata[idx] < sdata[idx + s]) sdata[idx] = sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sdata[blockDim.x] = sdata[0]; // max logits without label
-            sdata[blockDim.x + 1] = sdata[0]; // max logits with label
-            int idx = n_idx * dimsize * m_size + lb * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            if (dval > sdata[0]) sdata[blockDim.x + 1] = dval;
-        }
-
-        // compute exp sum for softmax
-        sdata[tid] = 0.;
-        __syncthreads();
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            if (j == lb) continue;
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            sdata[tid] += expf(dval - sdata[blockDim.x]);
-        }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                sdata[idx] += sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sdata[blockDim.x + 2] = sdata[0]; // exp sum without label
-        }
-        sdata[tid] = 0.;
-        __syncthreads();
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            sdata[tid] += expf(dval - sdata[blockDim.x + 1]);
-        }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                sdata[idx] += sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sdata[blockDim.x + 3] = sdata[0]; // exp sum with label
-        }
-
-        // if (i == tar && tid == 0) {
-        //     printf("sdata: ");
-        //     for (int ii{0}; ii < 4; ++ii) {
-        //         printf("%lf, ", sdata[blockDim.x + ii]);
-        //     }
-        //     printf("\n");
-        //     printf("logits:");
-        //     for (int ii{0}; ii < dimsize; ++ii) {
-        //         int idx = n_idx * dimsize * m_size + ii * m_size + m_idx;
-        //         scalar_t dval = logits[idx];
-        //         printf("%lf, ", dval);
-        //     }
-        //     printf("\n");
-        // }
-
-        // compute extra term
         sdata[tid] = 0.;
         __syncthreads();
         for (int j{tid}; j < dimsize; j+=blockDim.x) {
@@ -169,20 +185,14 @@ __global__ void LMarginLossForward(const int n_size,
                 term += logf(sdata[blockDim.x + 3]);
             } else {
                 dval -= sdata[blockDim.x];
-                term = expf(dval) / sdata[blockDim.x + 2] - coeff;
+                term = expf(dval) / sdata[blockDim.x + 2];
+                term -= sdata[blockDim.x + 4];
                 term *= (dval - logf(sdata[blockDim.x + 2]));
                 term *= lam / 2.;
             }
             sdata[tid] += term;
         }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                sdata[idx] += sdata[idx + s];
-            }
-            __syncthreads();
-        }
+        reduce_sum<scalar_t>(sdata, tid);
         if (tid == 0) losses[i] = sdata[0];
     }
 }
@@ -198,196 +208,48 @@ __global__ void LMarginLossBackward(const int n_size,
                             const float lam) {
     extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
     scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
-    int tid = threadIdx.x;
-    int bid = blockIdx.x;
-    scalar_t coeff = 1. / (dimsize - 1);
+    sdata = sdata + (blockDim.x + 8) * threadIdx.y;
 
-    // int tar = 3 * m_size + 1 * 16 + 2;
-    // if (bid == 0 && tid == 0) {
-    //     printf("%d, \n", tar);
-    // }
+    int tid = threadIdx.x;
+    int sample_id = blockIdx.x * blockDim.y + threadIdx.y;
+    int sample_offset = gridDim.x * blockDim.y;
+
+    if (tid == 0) {
+        sdata[blockDim.x + 4] = 1. / (dimsize - 1);
+    }
 
     int samplesize = n_size * m_size;
-    for (int i{bid}; i < samplesize; i+=gridDim.x) {
+    for (int i{sample_id}; i < samplesize; i += sample_offset) {
         int64_t lb = labels[i];
         int n_idx = i / m_size;
         int m_idx = i % m_size;
+
         if (lb == ignore_index) {
-            for (int j{tid}; j < dimsize; j+=blockDim.x) {
+            for (int j{tid}; j < dimsize; j += blockDim.x) {
                 int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
                 grad_logits[idx] = 0;
             }
             continue;
         } 
+        compute_reduce_values<scalar_t>(logits, sdata,
+                dimsize, m_size, n_idx, m_idx, lb, tid);
+        compute_sum_of_qx<scalar_t>(logits, sdata,
+                dimsize, m_size, n_idx, m_idx, lb, tid);
 
-        // compute max value for each vector for softmax
-        sdata[tid] = -1000;
-        __syncthreads();
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            if (j == lb) continue;
+        for (int j{tid}; j < dimsize; j += blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            if (dval > sdata[tid]) sdata[tid] = dval;
-        }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                if (sdata[idx] < sdata[idx + s]) sdata[idx] = sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sdata[blockDim.x] = sdata[0]; // max logits without label
-            sdata[blockDim.x + 1] = sdata[0]; // max logits with label
-            int idx = n_idx * dimsize * m_size + lb * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            if (dval > sdata[0]) sdata[blockDim.x + 1] = dval;
-        }
-
-        // compute exp sum for softmax
-        sdata[tid] = 0.;
-        __syncthreads();
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            if (j == lb) continue;
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            sdata[tid] += expf(dval - sdata[blockDim.x]);
-        }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                sdata[idx] += sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sdata[blockDim.x + 2] = sdata[0]; // exp sum without label
-        }
-        sdata[tid] = 0.;
-        __syncthreads();
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            sdata[tid] += expf(dval - sdata[blockDim.x + 1]);
-        }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                sdata[idx] += sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sdata[blockDim.x + 3] = sdata[0]; // exp sum with label
-        }
-
-        // if (i == tar && tid == 0) {
-        //     printf("sdata: ");
-        //     for (int ii{0}; ii < 4; ++ii) {
-        //         printf("%lf, ", sdata[blockDim.x + ii]);
-        //     }
-        //     printf("\n");
-        //     printf("logits:");
-        //     for (int ii{0}; ii < dimsize; ++ii) {
-        //         int idx = n_idx * dimsize * m_size + ii * m_size + m_idx;
-        //         scalar_t dval = logits[idx];
-        //         printf("%lf, ", dval);
-        //     }
-        //     printf("\n");
-        // }
-
-        // compute sum of q * x
-        sdata[tid] = 0.;
-        __syncthreads();
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            if (j == lb) continue;
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            scalar_t tmp = dval * expf(dval - sdata[blockDim.x]);
-            sdata[tid] += tmp;
-            // if (i == tar) {
-            //     if (tid == 0) printf("qx: ");
-            //     printf("%f, ", tmp / sdata[blockDim.x + 2]);
-            //     if (tid == 0) printf("\n ");
-            // }
-        }
-        __syncthreads();
-        for (int s=1; s < blockDim.x; s*=2) {
-            int idx = 2 * s * threadIdx.x;
-            if (idx < blockDim.x && idx + s < blockDim.x) {
-                sdata[idx] += sdata[idx + s];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sdata[blockDim.x + 4] = sdata[0] / sdata[blockDim.x + 2]; 
-            // if (i == tar && tid == 0)
-            // printf("\nsum of qx: %f\n", sdata[blockDim.x + 4]);
-        }
-        for (int j{tid}; j < dimsize; j+=blockDim.x) {
-            int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-            scalar_t dval = logits[idx];
-            scalar_t pc = expf(dval - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3];
-            // if (i == tar) {
-            //     if (tid == 0) printf("pc, and dval: ");
-            //     printf("%f, ", pc);
-            //     printf("%f, ", dval);
-            //     if (tid == 0) printf("\n ");
-            // }
+            scalar_t val = logits[idx];
+            scalar_t pc = expf(val - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3];
             scalar_t gval;
             if (j == lb) {
                 gval = pc - 1.;
             } else {
-                gval = dval - sdata[blockDim.x + 4] + 1.;
-                // if (i == tar) {
-                //     if (tid == 2) printf("gval: ");
-                //     printf("%f, ", gval);
-                //     if (tid == 2) printf("\n ");
-                // }
-                gval *= expf(dval - sdata[blockDim.x]) / sdata[blockDim.x + 2]; 
-                // if (i == tar) {
-                //     if (tid == 2) printf("gval: ");
-                //     printf("%f, ", gval);
-                //     if (tid == 2) printf("\n ");
-                // }
-                gval = pc + (gval - coeff) * lam / 2.;
-                // if (i == tar) {
-                //     if (tid == 2) printf("gval: ");
-                //     printf("%f, ", gval);
-                //     if (tid == 2) printf("\n ");
-                // }
+                gval = val - sdata[blockDim.x + 5] + 1.;
+                gval *= expf(val - sdata[blockDim.x]) / sdata[blockDim.x + 2];
+                gval = pc + (gval - sdata[blockDim.x + 4]) * lam / 2.;
             }
-            // if (i == tar) {
-            //     if (tid == 2) printf("idx: ");
-            //     printf("%d, ", idx);
-            //     if (tid == 2) printf("\n ");
-            // }
-            // if (i == tar) {
-            //     if (tid == 2) printf("grad[idx]: ");
-            //     printf("%f, ", grad[idx]);
-            //     if (tid == 2) printf("\n ");
-            // }
-            // if (i == tar) {
-            //     if (tid == 2) printf("grad_logits[i]: ");
-            //     printf("%f, ", grad_logits[i]);
-            //     if (tid == 2) printf("\n ");
-            // }
             grad_logits[idx] = gval;
-            // sdata[tid] += dval * expf(dval - sdata[blockDim.x]);
-            // if (i == 0 && tid == 0) printf("\n gval: ");
-            // if (i == 0) {
-            //     printf("%f, ", gval);
-            // }
-            // if (i == 0 && tid == 0) printf("\n grad_output: " );
-            // if (i == 0 && tid == 0) {
-            //     printf("%f, ", grad[idx]);
-            // }
-            // if (i == 0 && tid == 0) printf("\n");
         }
-
     }
 }
 
@@ -413,18 +275,18 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
         return losses;
     }
 
+    int blockx = 32;
+    while (blockx < dimsize) blockx *= 2;
+    blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
+    int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
+    int gridx = std::min(4096, (int)(samplesize / blocky));
+    int n_shm = (blockx + 8) * blocky;
+    dim3 block(blockx, blocky);
+    dim3 grid(gridx);
 
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "large margin forward", [&] {
-        int blockdim = 32;
-        for (int i{0}; i < 5; ++i) {
-            if (blockdim < dimsize) blockdim *= 2;
-        }
-        // if (dimsize > 32) blockdim = 64;
-        dim3 block(blockdim);
-        int griddim = 48 * 1024 / sizeof(scalar_t) / (blockdim + 6);
-        dim3 grid(std::min(griddim, (int)samplesize));
-        int shm_size = (blockdim + 6) * sizeof(scalar_t);
+        int shm_size = n_shm * sizeof(scalar_t);
         LMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             logits.contiguous().data<scalar_t>(), 
@@ -458,24 +320,24 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
         return grad_logits;
     }
 
+    int blockx = 32;
+    while (blockx < dimsize) blockx *= 2;
+    blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
+    int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
+    int gridx = std::min(4096, (int)(samplesize / blocky));
+    int n_shm = (blockx + 8) * blocky;
+    dim3 block(blockx, blocky);
+    dim3 grid(gridx);
 
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "large margin backwrd", [&] {
-        int blockdim = 32;
-        for (int i{0}; i < 5; ++i) {
-            if (blockdim < dimsize) blockdim *= 2;
-        }
-        // if (dimsize > 32) blockdim = 64;
-        dim3 block(blockdim);
-        int griddim = 48 * 1024 / sizeof(scalar_t) / (6 + blockdim);
-        dim3 grid(std::min(griddim, (int)samplesize));
-        int shm_size = (blockdim + 6) * sizeof(scalar_t); 
+        int shm_size = n_shm * sizeof(scalar_t); 
         LMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             grad_logits.contiguous().data<scalar_t>(),
             logits.contiguous().data<scalar_t>(), 
             labels.contiguous().data<int64_t>(), 
-            ignore_index,lam 
+            ignore_index, lam 
         );
     });
     THCudaCheck(cudaGetLastError());

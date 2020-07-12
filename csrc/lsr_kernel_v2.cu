@@ -23,7 +23,7 @@ template<typename scalar_t>
 __forceinline__ __device__ void reduce_sum(scalar_t *sdata, int blocksize, int tid) {
     __syncthreads();
     // NOTE: block size should be 2 ** x
-    for (unsigned int s{blocksize / 2}; s > 0; s >>= 1) {
+    for (int s{blocksize / 2}; s > 0; s >>= 1) {
         if (tid < s) sdata[tid] += sdata[tid + s];
         __syncthreads();
     }
