@@ -208,10 +208,12 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
         return grad_logits;
     }
 
+    dim3 block(BLOCKSIZE);
+    int gridx = std::min((int)std::ceil((float)samplesize / BLOCKSIZE), (int)4096);
+    dim3 grid(gridx);
+
     // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lsr backwrd", [&] {
-        dim3 block(BLOCKSIZE);
-        dim3 grid(std::min((int)std::ceil(samplesize / BLOCKSIZE), (int)4096));
         LSRLossBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             grad_logits.contiguous().data<scalar_t>(),
