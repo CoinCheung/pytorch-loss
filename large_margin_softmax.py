@@ -234,7 +234,7 @@ if __name__ == '__main__':
     #  criteria1 = nn.CrossEntropyLoss(reduction='mean')
     #  criteria2 = nn.CrossEntropyLoss(reduction='mean')
     criteria1 = LargeMarginSoftmaxV1(reduction='mean')
-    criteria2 = LargeMarginSoftmaxV3(reduction='mean')
+    criteria2 = LargeMarginSoftmaxV2(reduction='mean')
     net1.cuda()
     net2.cuda()
     net1.train()

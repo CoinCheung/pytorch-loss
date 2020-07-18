@@ -28,6 +28,9 @@ setup(
         cpp_extension.CUDAExtension(
             'large_margin_cpp',
             ['csrc/large_margin_kernel.cu']),
+        cpp_extension.CUDAExtension(
+            'ohem_cpp',
+            ['csrc/ohem_label_kernel.cu']),
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension}
 )
