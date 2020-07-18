@@ -109,7 +109,6 @@ template<typename scalar_t>
 __global__ void LSRLossBackward(const int n_size,
                             const int dimsize, const int m_size,
                             scalar_t *grad_logits,
-                            const scalar_t *scores,
                             const int64_t *labels,
                             const int64_t ignore_index,
                             const float smooth) {
@@ -130,9 +129,9 @@ __global__ void LSRLossBackward(const int n_size,
         scalar_t gradval = 0;
         if (lb != ignore_index) {
             if (lb == dim_idx) {
-                gradval = sumy * scores[i] - lb_pos;
+                gradval = sumy * grad_logits[i] - lb_pos;
             } else {
-                gradval = sumy * scores[i] - lb_neg;
+                gradval = sumy * grad_logits[i] - lb_neg;
             }
         }
         grad_logits[i] = gradval;
@@ -198,18 +197,17 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
     const int n_size = logits.size(0);
     const int dimsize = logits.size(1);
     const int m_size = logits.numel() / (n_size * dimsize);
-    const int samplesize = labels.numel();
+    const int log_size = logits.numel();
 
     // allocate memory and cuda grid/block
-    auto grad_logits = torch::empty_like(logits);
-    auto scores = torch::softmax(logits, 1);
+    auto grad_logits = torch::softmax(logits, 1);
     if (grad_logits.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return grad_logits;
     }
 
     dim3 block(BLOCKSIZE);
-    int gridx = std::min((int)std::ceil((float)samplesize / BLOCKSIZE), (int)4096);
+    int gridx = std::min(log_size / BLOCKSIZE, (int)4096);
     dim3 grid(gridx);
 
     // call kernel
@@ -217,7 +215,6 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
         LSRLossBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
             grad_logits.contiguous().data<scalar_t>(),
-            scores.contiguous().data<scalar_t>(), 
             labels.contiguous().data<int64_t>(), 
             ignore_index, smooth
         );
