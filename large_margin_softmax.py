@@ -234,7 +234,7 @@ if __name__ == '__main__':
     #  criteria1 = nn.CrossEntropyLoss(reduction='mean')
     #  criteria2 = nn.CrossEntropyLoss(reduction='mean')
     criteria1 = LargeMarginSoftmaxV1(reduction='mean')
-    criteria2 = LargeMarginSoftmaxV2(reduction='mean')
+    criteria2 = LargeMarginSoftmaxV3(reduction='mean')
     net1.cuda()
     net2.cuda()
     net1.train()
@@ -267,6 +267,8 @@ if __name__ == '__main__':
         optim2.step()
         #  s = logits.cpu().detach().numpy()
         #  np.save('../logitsv3.npy', s)
+        #  print(logits[0, :, 0, 0])
+        #  print(lbs[0, 0, 0])
 
         #  print('net2.weight: ', net2.out.weight[0, 0, :, 0])
         #  net2.load_state_dict(net1.state_dict())

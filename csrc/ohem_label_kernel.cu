@@ -18,7 +18,7 @@
 using std::cout;
 using std::endl;
 
-#define BLOCKSIZE 512
+#define BLOCKSIZE 1024
 
 
 template<typename scalar_t>
@@ -105,6 +105,49 @@ __global__ void OHEMGetScores(const int n_size,
 
 
 template<typename scalar_t>
+__global__ void OHEMGetScoresSpatial(const int n_size,
+                            const int dimsize, const int m_size,
+                            const scalar_t *logits,
+                            scalar_t *scores,
+                            const int64_t *labels,
+                            int *indices,
+                            const int64_t ignore_index) {
+    int sample_offset = gridDim.x * blockDim.x;
+
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int samplesize = n_size * m_size;
+
+    for (int i{tid}; i < samplesize; i += sample_offset) {
+        indices[i] = i;
+        int n_idx = i / m_size;
+        int m_idx = i % m_size;
+        int lb = static_cast<int>(labels[i]);
+
+        if (lb == ignore_index) {
+            scores[i] = 1.;
+            continue;
+        }
+
+        // obtain max
+        scalar_t max_val = -10000.;
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            if (val > max_val) max_val = val;
+        }
+        // obtain sum exp
+        scalar_t sum_exp = 0.;
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            sum_exp += expf(logits[idx] - max_val);
+        }
+        int idx = n_idx * dimsize * m_size + lb * m_size + m_idx;
+        scores[i] = expf(logits[idx] - max_val) / sum_exp;
+    }
+}
+
+
+template<typename scalar_t>
 __global__ void OHEMSetLabels(const int samplesize,
                             const int *idx,
                             const scalar_t *scores,
@@ -140,39 +183,62 @@ at::Tensor Score_ohem_label_cuda(const at::Tensor &logits,
     // allocate memory and cuda grid/block
     auto ohem_label = labels.clone();
     auto scores = torch::empty_like(labels, logits.options());
+    thrust::device_vector<int> idx(samplesize);
     if (ohem_label.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return ohem_label;
     }
 
-    int blockx = 32;
-    while (blockx < dimsize) blockx *= 2;
-    blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
-    int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
-    blocky = std::max((int)1, blocky);
-    int gridx = std::min(4096, (int)(samplesize / blocky));
-    gridx = std::max((int)1, gridx);
-    int n_shm = blockx * blocky;
+    // call kernel
+    if (dimsize < 32 && samplesize > (4 * 1024)) {
+        int gridx = std::min((int)4096, int(samplesize / BLOCKSIZE));
+        gridx = std::max((int)1, gridx);
+        dim3 block1(BLOCKSIZE);
+        dim3 grid1(gridx);
+        
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(logits.scalar_type(), "ohem score label", [&] {
+        
+            OHEMGetScoresSpatial<scalar_t><<<grid1, block1, 0, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                logits.contiguous().data<scalar_t>(), 
+                scores.contiguous().data<scalar_t>(),
+                labels.contiguous().data<int64_t>(), 
+                thrust::raw_pointer_cast(&idx[0]),
+                ignore_index
+            );
+        });
+    } else {
+        int blockx = 32;
+        while (blockx < dimsize) blockx *= 2;
+        blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
+        int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
+        blocky = std::max((int)1, blocky);
+        int gridx = std::min(4096, (int)(samplesize / blocky));
+        gridx = std::max((int)1, gridx);
+        int n_shm = blockx * blocky;
+        dim3 block1(blockx, blocky);
+        dim3 grid1(gridx);
+
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(logits.scalar_type(), "ohem score label", [&] {
+        
+            int shm_size = n_shm * sizeof(scalar_t); 
+            OHEMGetScores<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                logits.contiguous().data<scalar_t>(), 
+                scores.contiguous().data<scalar_t>(),
+                labels.contiguous().data<int64_t>(), 
+                thrust::raw_pointer_cast(&idx[0]),
+                ignore_index
+            );
+        });
+    }
+
+
     int grid2_num = std::min(4096, (int)(samplesize / BLOCKSIZE));
     grid2_num = std::max((int)1, grid2_num);
-    dim3 block1(blockx, blocky);
-    dim3 grid1(gridx);
     dim3 block2(BLOCKSIZE);
     dim3 grid2(grid2_num);
-
-    // call kernel
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(logits.scalar_type(), "ohem score label", [&] {
-    
-        thrust::device_vector<int> idx(samplesize);
-        int shm_size = n_shm * sizeof(scalar_t); 
-        OHEMGetScores<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size, 
-            logits.contiguous().data<scalar_t>(), 
-            scores.contiguous().data<scalar_t>(),
-            labels.contiguous().data<int64_t>(), 
-            thrust::raw_pointer_cast(&idx[0]),
-            ignore_index
-        );
 
         thrust::sort_by_key(
             thrust::device,

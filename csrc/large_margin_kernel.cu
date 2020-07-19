@@ -254,6 +254,133 @@ __global__ void LMarginLossBackward(const int n_size,
 }
 
 
+template<typename scalar_t>
+__global__ void SpatialLMarginLossForward(const int n_size,
+                            const int dimsize, const int m_size,
+                            const scalar_t *logits,
+                            const int64_t *labels,
+                            scalar_t *losses,
+                            const int64_t ignore_index, const float lam) {
+    // shared memory
+    __shared__ int sdata[BLOCKSIZE];
+
+    sdata[0] = blockIdx.x * blockDim.x + threadIdx.x; //tid 
+    sdata[1] = n_size * m_size; // samplesize
+    sdata[2] = gridDim.x * blockDim.x; // sample_offset
+
+    for (int i{sdata[0]}; i < sdata[1]; i += sdata[2]) {
+        int lb = static_cast<int>(labels[i]);
+        if (lb == ignore_index) {
+            losses[i] = 0;
+            continue;
+        } 
+        int n_idx = i / m_size;
+        int m_idx = i % m_size;
+
+        // compute max
+        scalar_t max_with_lb = -10000.;
+        scalar_t max_no_lb = -10000.;
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            if (val > max_with_lb) max_with_lb = val;
+            if (j == lb) continue;
+            if (val > max_no_lb) max_no_lb = val;
+        }
+        // compute sum of exp
+        scalar_t sum_with_lb = 0.;
+        scalar_t sum_no_lb = 0.;
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            sum_with_lb += expf(val - max_with_lb);
+            if (j == lb) continue;
+            sum_no_lb += expf(val - max_no_lb);
+        }
+        // compute loss
+        scalar_t loss_val = 0;
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            if (j == lb) {
+                loss_val += - (val - max_with_lb) + logf(sum_with_lb); 
+            } else {
+                loss_val += (lam / 2.) * (expf(val - max_no_lb) / sum_no_lb - (1. / (dimsize - 1))) * (val - max_no_lb - logf(sum_no_lb));
+            }
+        }
+        losses[i] = loss_val;
+    }
+}
+
+
+template<typename scalar_t>
+__global__ void SpatialLMarginLossBackward(const int n_size,
+                            const int dimsize, const int m_size,
+                            scalar_t *grad_logits,
+                            const scalar_t *logits,
+                            const int64_t *labels,
+                            const int64_t ignore_index,
+                            const float lam) {
+    // shared memory
+    __shared__ int sdata[BLOCKSIZE];
+
+    sdata[0] = blockIdx.x * blockDim.x + threadIdx.x; //tid 
+    sdata[1] = n_size * m_size; // samplesize
+    sdata[2] = gridDim.x * blockDim.x; // sample_offset
+
+    for (int i{sdata[0]}; i < sdata[1]; i += sdata[2]) {
+        int lb = static_cast<int>(labels[i]);
+        int n_idx = i / m_size;
+        int m_idx = i % m_size;
+        if (lb == ignore_index) {
+            for (int j{0}; j < dimsize; ++j) {
+                int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
+                grad_logits[idx] = 0;
+            }
+            continue;
+        } 
+
+        // compute max
+        scalar_t max_with_lb = -10000.;
+        scalar_t max_no_lb = -10000.;
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            if (val > max_with_lb) max_with_lb = val;
+            if (j == lb) continue;
+            if (val > max_no_lb) max_no_lb = val;
+        }
+        // compute sum of exp
+        scalar_t sum_with_lb = 0.;
+        scalar_t sum_no_lb = 0.;
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            sum_with_lb += expf(val - max_with_lb);
+            if (j == lb) continue;
+            sum_no_lb += expf(val - max_no_lb);
+        }
+        // compute sum of qx
+        scalar_t sum_qx = 0.;
+        for (int j{0}; j < dimsize; ++j) {
+            if (j == lb) continue;
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            sum_qx += val * expf(val - max_no_lb) / sum_no_lb;
+        }
+        // compute grads
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[idx];
+            if (lb == j) {
+                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb - 1.;
+            } else {
+                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb + (lam / 2.) * ((val + 1. - sum_qx) * expf(val - max_no_lb) / sum_no_lb - (1. / (dimsize - 1)));
+            }
+        }
+    }
+}
+
 // cuda forward and backward
 at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
                                   const at::Tensor &labels,
@@ -275,26 +402,43 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
         return losses;
     }
 
-    int blockx = 32;
-    while (blockx < dimsize) blockx *= 2;
-    blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
-    int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
-    int gridx = std::min(4096, (int)(samplesize / blocky));
-    int n_shm = (blockx + 8) * blocky;
-    dim3 block(blockx, blocky);
-    dim3 grid(gridx);
-
     // call kernel
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "large margin forward", [&] {
-        int shm_size = n_shm * sizeof(scalar_t);
-        LMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size, 
-            logits.contiguous().data<scalar_t>(), 
-            labels.contiguous().data<int64_t>(), 
-            losses.contiguous().data<scalar_t>(),
-            ignore_index, lam 
-        );
-    });
+    if (dimsize < 32 && samplesize > 4096) {
+        int gridx = std::max(std::min(4096, samplesize / BLOCKSIZE), 1);
+        dim3 block(BLOCKSIZE);
+        dim3 grid(gridx);
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "large margin forward", [&] {
+            int shm_size = BLOCKSIZE * sizeof(scalar_t);
+            SpatialLMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                logits.contiguous().data<scalar_t>(), 
+                labels.contiguous().data<int64_t>(), 
+                losses.contiguous().data<scalar_t>(),
+                ignore_index, lam 
+            );
+        });
+    } else {
+        int blockx = 32;
+        while (blockx < dimsize) blockx *= 2;
+        blockx = std::max(std::min(BLOCKSIZE, blockx / 2), 32);
+        int blocky = std::max(std::min(samplesize, BLOCKSIZE / blockx), 1);
+        int gridx = std::max(std::min(4096, samplesize / blocky), 1);
+        int n_shm = (blockx + 8) * blocky;
+        dim3 block(blockx, blocky);
+        dim3 grid(gridx);
+
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "large margin forward", [&] {
+            int shm_size = n_shm * sizeof(scalar_t);
+            LMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                logits.contiguous().data<scalar_t>(), 
+                labels.contiguous().data<int64_t>(), 
+                losses.contiguous().data<scalar_t>(),
+                ignore_index, lam 
+            );
+        });
+    }
+
     THCudaCheck(cudaGetLastError());
     return losses;
 }
@@ -320,26 +464,42 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
         return grad_logits;
     }
 
-    int blockx = 32;
-    while (blockx < dimsize) blockx *= 2;
-    blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
-    int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
-    int gridx = std::min(4096, (int)(samplesize / blocky));
-    int n_shm = (blockx + 8) * blocky;
-    dim3 block(blockx, blocky);
-    dim3 grid(gridx);
+    if (dimsize < 32 && samplesize > 4096) {
+        int gridx = std::max(std::min(4096, samplesize / BLOCKSIZE), 1);
+        dim3 block(BLOCKSIZE);
+        dim3 grid(gridx);
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "large margin backwrd", [&] {
+            int shm_size = BLOCKSIZE * sizeof(scalar_t);
+            SpatialLMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                grad_logits.contiguous().data<scalar_t>(),
+                logits.contiguous().data<scalar_t>(), 
+                labels.contiguous().data<int64_t>(), 
+                ignore_index, lam 
+            );
+        });
+    } else {
+        int blockx = 32;
+        while (blockx < dimsize) blockx *= 2;
+        blockx = std::max(std::min(BLOCKSIZE, blockx / 2), 32);
+        int blocky = std::max(std::min(samplesize, BLOCKSIZE / blockx), 1);
+        int gridx = std::max(std::min(4096, samplesize / blocky), 1);
+        int n_shm = (blockx + 8) * blocky;
+        dim3 block(blockx, blocky);
+        dim3 grid(gridx);
 
-    // call kernel
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "large margin backwrd", [&] {
-        int shm_size = n_shm * sizeof(scalar_t); 
-        LMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size, 
-            grad_logits.contiguous().data<scalar_t>(),
-            logits.contiguous().data<scalar_t>(), 
-            labels.contiguous().data<int64_t>(), 
-            ignore_index, lam 
-        );
-    });
+        // call kernel
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "large margin backwrd", [&] {
+            int shm_size = n_shm * sizeof(scalar_t); 
+            LMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                grad_logits.contiguous().data<scalar_t>(),
+                logits.contiguous().data<scalar_t>(), 
+                labels.contiguous().data<int64_t>(), 
+                ignore_index, lam 
+            );
+        });
+    }
     THCudaCheck(cudaGetLastError());
     return grad_logits;
 }
