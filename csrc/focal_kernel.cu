@@ -16,23 +16,24 @@ __global__ void FocalLossForward(const int nthreads,
                                  const scalar_t *logits,
                                  const int64_t *labels,
                                  scalar_t *loss,
-                                 const float gamma, const float alpha) {
+                                 const scalar_t gamma, const scalar_t alpha) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
+    const scalar_t one(1.);
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t lgt = logits[i];
-        scalar_t prob = 1. / (1. + expf(-lgt));
+        scalar_t prob = one / (one + expf(-lgt));
         scalar_t log_p, log_1_p;
         if (lgt >= 0) {
-            log_p = -logf(1. + expf(-lgt));
+            log_p = -logf(one + expf(-lgt));
             log_1_p = -lgt + log_p;
         } else {
-            log_1_p = -logf(1. + expf(lgt));
+            log_1_p = -logf(one + expf(lgt));
             log_p = lgt + log_1_p;
         }
-        scalar_t term1 = powf(1. - prob, gamma) * log_p;
+        scalar_t term1 = powf(one - prob, gamma) * log_p;
         scalar_t term2 = powf(prob, gamma) * log_1_p;
-        loss[i] = -alpha * term1 * labels[i] - (1. - alpha) * term2 * (1. - labels[i]);
+        loss[i] = -alpha * term1 * labels[i] - (one - alpha) * term2 * (one - labels[i]);
     }
 }
 
@@ -42,23 +43,24 @@ __global__ void FocalLossBackward(const int nthreads,
                                   const int64_t *labels,
                                   const scalar_t *grad_loss,
                                   scalar_t *grad_logits,
-                                  const float gamma, const float alpha) {
+                                  const scalar_t gamma, const scalar_t alpha) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
+    const scalar_t one(1.);
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t lgt = logits[i];
-        scalar_t prob = 1. / (1. + expf(-lgt));
+        scalar_t prob = one / (one + expf(-lgt));
         scalar_t log_p, log_1_p;
         if (lgt >=0) {
-            log_p = -logf(1. + expf(-lgt));
+            log_p = -logf(one + expf(-lgt));
             log_1_p = -lgt + log_p;
         } else {
-            log_1_p = -logf(1. + expf(lgt));
+            log_1_p = -logf(one + expf(lgt));
             log_p = lgt + log_1_p;
         }
-        scalar_t term1 = powf(1. - prob, gamma) * (1. - prob - gamma * prob * log_p);
-        scalar_t term2 = powf(prob, gamma) * (gamma * (1. - prob) * log_1_p - prob);
-        grad_logits[i] = -alpha * term1 * labels[i] - (1. - alpha) * term2 * (1. - labels[i]);
+        scalar_t term1 = powf(one - prob, gamma) * (one - prob - gamma * prob * log_p);
+        scalar_t term2 = powf(prob, gamma) * (gamma * (one - prob) * log_1_p - prob);
+        grad_logits[i] = -alpha * term1 * labels[i] - (one - alpha) * term2 * (one - labels[i]);
         grad_logits[i] = grad_logits[i] * grad_loss[i];
     }
 }
@@ -92,7 +94,7 @@ at::Tensor FocalLoss_forward_cuda(const at::Tensor &logits,
             logits.contiguous().data<scalar_t>(), 
             labels.contiguous().data<int64_t>(),
             losses.contiguous().data<scalar_t>(),
-            gamma, alpha
+            scalar_t(gamma), scalar_t(alpha)
         );
     });
     THCudaCheck(cudaGetLastError());
@@ -131,7 +133,7 @@ at::Tensor FocalLoss_backward_cuda(const at::Tensor &grad,
             labels.contiguous().data<int64_t>(),
             grad.contiguous().data<scalar_t>(),
             grad_logits.contiguous().data<scalar_t>(),
-            gamma, alpha
+            scalar_t(gamma), scalar_t(alpha)
         );
     });
     THCudaCheck(cudaGetLastError());

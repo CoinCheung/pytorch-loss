@@ -109,8 +109,7 @@ if __name__ == "__main__":
     opt1 = torch.optim.SGD(net1.parameters(), lr=1e-3)
     opt2 = torch.optim.SGD(net2.parameters(), lr=1e-3)
     bs = 32
-    #  for i in range(10000):
-    for i in range(2):
+    for i in range(10000):
         inten = torch.randn(bs, 3, 224, 224).cuda().detach()
         label = torch.randint(0, 10, (bs, )).cuda().detach()
 

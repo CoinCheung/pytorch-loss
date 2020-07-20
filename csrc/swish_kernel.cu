@@ -12,6 +12,11 @@
 #include <cfloat>
 
 
+#define BLOCKSIZE 1024
+
+
+// NOTE: If use constant number such as 1. or 2., must use scalar_t(1.) or scalar_t(2.), or the values will be casted into double type.
+
 // kernel function for forward and backward
 template<typename scalar_t>
 __global__ void SwishForward(const int nthreads,
@@ -20,8 +25,9 @@ __global__ void SwishForward(const int nthreads,
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
     for (int i{tid}; i < nthreads; i+=stride) {
-        scalar_t sigmoid = 1. / (1. + expf(-feat[i]));
-        activations[i] = feat[i] * sigmoid;
+        const scalar_t one(1.);
+        scalar_t val = feat[i];
+        activations[i] = val / (one + expf(-val));
     }
 }
 
@@ -33,9 +39,12 @@ __global__ void SwishBackward(const int nthreads,
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
     for (int i{tid}; i < nthreads; i+=stride) {
-        scalar_t sigmoid = 1. / (1. + expf(-feat[i]));
-        grad_feat[i] = sigmoid * (1. + feat[i] * (1. - sigmoid));
+        const scalar_t one(1.);
+        scalar_t val = feat[i];
+
+        grad_feat[i] = (one + val / (one + expf(val))) / (one + expf(-val));
         grad_feat[i] *= grad[i];
+
     }
 }
 
@@ -50,9 +59,9 @@ at::Tensor Swish_forward_cuda(const at::Tensor &feat) {
 
     const int num_samples = feat.numel();
     dim3 grid(std::min(
-        THCCeilDiv((int64_t)num_samples, (int64_t)512), (int64_t)4096
+        THCCeilDiv(num_samples, 2 * BLOCKSIZE), 4096
     ));
-    dim3 block(512);
+    dim3 block(BLOCKSIZE);
     if (activations.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return activations;
@@ -78,11 +87,13 @@ at::Tensor Swish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
 
     // allocate memory and cuda grid/block
     auto grad_feat = at::empty_like(feat);
+
     const int num_samples = feat.numel();
     dim3 grid(std::min(
-        THCCeilDiv((int64_t)num_samples, (int64_t)512), (int64_t)4096
+        // THCCeilDiv(num_samples, BLOCKSIZE), 4096
+        THCCeilDiv(num_samples, 2 * BLOCKSIZE), 4096
     ));
-    dim3 block(512);
+    dim3 block(BLOCKSIZE);
     if (grad_feat.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return grad_feat;

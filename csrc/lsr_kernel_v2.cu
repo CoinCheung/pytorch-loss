@@ -75,8 +75,8 @@ __global__ void LSRLossForward(const int n_size,
 
     int tid = threadIdx.x;
     int sample_id = blockIdx.x * blockDim.y + threadIdx.y;
-    scalar_t lb_pos = 1. - smooth;
-    scalar_t lb_neg = smooth / dimsize;
+    const scalar_t lb_pos(1.f - smooth);
+    const scalar_t lb_neg = smooth / dimsize;
     int samplesize = n_size * m_size;
 
     for (int i{sample_id}; i < samplesize; i += sample_offset) {
@@ -114,9 +114,9 @@ __global__ void LSRLossBackward(const int n_size,
                             const float smooth) {
     int tid = blockDim.x * blockIdx.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
-    scalar_t lb_pos = 1. - smooth;
-    scalar_t lb_neg = smooth / dimsize;
-    scalar_t sumy = lb_neg * (dimsize - 1) + lb_pos;
+    const scalar_t lb_pos(1.f - smooth);
+    const scalar_t lb_neg = smooth / dimsize;
+    const scalar_t sumy = lb_neg * (dimsize - 1) + lb_pos;
 
     int samplesize = n_size * dimsize * m_size;
     int n_offset = dimsize * m_size;
@@ -126,7 +126,7 @@ __global__ void LSRLossBackward(const int n_size,
         int m_idx = (i % n_offset) % m_size;
         int64_t lb = labels[n_idx * m_size + m_idx];
 
-        scalar_t gradval = 0;
+        scalar_t gradval(0);
         if (lb != ignore_index) {
             if (lb == dim_idx) {
                 gradval = sumy * grad_logits[i] - lb_pos;

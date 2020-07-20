@@ -76,8 +76,9 @@ __forceinline__ __device__ void compute_reduce_values(
     // b+3 is sum of exp with target 
 
     // compute max with and without label index
+    const scalar_t zero(0.);
     __syncthreads();
-    sdata[tid] = -1000;
+    sdata[tid] = scalar_t(-10000.);
     __syncthreads();
     for (int j{tid}; j < dimsize; j += blockDim.x) {
         if (j == lb) continue;
@@ -95,7 +96,7 @@ __forceinline__ __device__ void compute_reduce_values(
     }
 
     // compute sum of exp with and without label index
-    sdata[tid] = 0.;
+    sdata[tid] = zero;
     __syncthreads();
     for (int j{tid}; j < dimsize; j += blockDim.x) {
         if (j == lb) continue;
@@ -106,7 +107,7 @@ __forceinline__ __device__ void compute_reduce_values(
     reduce_sum<scalar_t>(sdata, tid);
     if (tid == 0) sdata[blockDim.x + 2] = sdata[0];
 
-    sdata[tid] = 0.;
+    sdata[tid] = zero;
     __syncthreads();
     for (int j{tid}; j < dimsize; j += blockDim.x) {
         int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
@@ -124,8 +125,9 @@ __forceinline__ __device__ void compute_sum_of_qx(
         const int dimsize, const int m_size, 
         int n_idx, int m_idx, int64_t lb, int tid) {
     // compute sum of q * x to sdata[blockDim.x + 5]
+    const scalar_t zero(0.);
     __syncthreads();
-    sdata[tid] = 0.;
+    sdata[tid] = zero;
     __syncthreads();
     for (int j{tid}; j < dimsize; j += blockDim.x) {
         if (j == lb) continue;
@@ -159,7 +161,7 @@ __global__ void LMarginLossForward(const int n_size,
     int sample_offset = gridDim.x * blockDim.y;
 
     if (tid == 0) {
-        sdata[blockDim.x + 4] = 1. / (dimsize - 1);
+        sdata[blockDim.x + 4] = scalar_t(1.) / (dimsize - 1);
     }
 
     int samplesize = n_size * m_size;
@@ -174,12 +176,12 @@ __global__ void LMarginLossForward(const int n_size,
         compute_reduce_values<scalar_t>(logits, sdata,
                 dimsize, m_size, n_idx, m_idx, lb, tid);
 
-        sdata[tid] = 0.;
+        sdata[tid] = scalar_t(0.);
         __syncthreads();
         for (int j{tid}; j < dimsize; j+=blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
             scalar_t dval = logits[idx];
-            scalar_t term{0};
+            scalar_t term(0);
             if (j == lb) {
                 term = -(dval - sdata[blockDim.x + 1]);
                 term += logf(sdata[blockDim.x + 3]);
@@ -188,7 +190,7 @@ __global__ void LMarginLossForward(const int n_size,
                 term = expf(dval) / sdata[blockDim.x + 2];
                 term -= sdata[blockDim.x + 4];
                 term *= (dval - logf(sdata[blockDim.x + 2]));
-                term *= lam / 2.;
+                term *= scalar_t(lam / 2.f);
             }
             sdata[tid] += term;
         }
@@ -236,17 +238,18 @@ __global__ void LMarginLossBackward(const int n_size,
         compute_sum_of_qx<scalar_t>(logits, sdata,
                 dimsize, m_size, n_idx, m_idx, lb, tid);
 
+        const scalar_t one(1.f);
         for (int j{tid}; j < dimsize; j += blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
             scalar_t val = logits[idx];
             scalar_t pc = expf(val - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3];
             scalar_t gval;
             if (j == lb) {
-                gval = pc - 1.;
+                gval = pc - one;
             } else {
-                gval = val - sdata[blockDim.x + 5] + 1.;
+                gval = val - sdata[blockDim.x + 5] + one;
                 gval *= expf(val - sdata[blockDim.x]) / sdata[blockDim.x + 2];
-                gval = pc + (gval - sdata[blockDim.x + 4]) * lam / 2.;
+                gval = pc + (gval - sdata[blockDim.x + 4]) * scalar_t(lam / 2.);
             }
             grad_logits[idx] = gval;
         }
@@ -278,8 +281,8 @@ __global__ void SpatialLMarginLossForward(const int n_size,
         int m_idx = i % m_size;
 
         // compute max
-        scalar_t max_with_lb = -10000.;
-        scalar_t max_no_lb = -10000.;
+        scalar_t max_with_lb(-10000.);
+        scalar_t max_no_lb(-10000.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
@@ -288,8 +291,8 @@ __global__ void SpatialLMarginLossForward(const int n_size,
             if (val > max_no_lb) max_no_lb = val;
         }
         // compute sum of exp
-        scalar_t sum_with_lb = 0.;
-        scalar_t sum_no_lb = 0.;
+        scalar_t sum_with_lb(0.);
+        scalar_t sum_no_lb(0.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
@@ -298,14 +301,14 @@ __global__ void SpatialLMarginLossForward(const int n_size,
             sum_no_lb += expf(val - max_no_lb);
         }
         // compute loss
-        scalar_t loss_val = 0;
+        scalar_t loss_val(0.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
             if (j == lb) {
                 loss_val += - (val - max_with_lb) + logf(sum_with_lb); 
             } else {
-                loss_val += (lam / 2.) * (expf(val - max_no_lb) / sum_no_lb - (1. / (dimsize - 1))) * (val - max_no_lb - logf(sum_no_lb));
+                loss_val += scalar_t(lam / 2.) * (expf(val - max_no_lb) / sum_no_lb - (scalar_t(1.) / (dimsize - 1))) * (val - max_no_lb - logf(sum_no_lb));
             }
         }
         losses[i] = loss_val;
@@ -328,6 +331,8 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
     sdata[1] = n_size * m_size; // samplesize
     sdata[2] = gridDim.x * blockDim.x; // sample_offset
 
+    const scalar_t one(1.);
+
     for (int i{sdata[0]}; i < sdata[1]; i += sdata[2]) {
         int lb = static_cast<int>(labels[i]);
         int n_idx = i / m_size;
@@ -341,8 +346,8 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
         } 
 
         // compute max
-        scalar_t max_with_lb = -10000.;
-        scalar_t max_no_lb = -10000.;
+        scalar_t max_with_lb(-10000.);
+        scalar_t max_no_lb(-10000.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
@@ -351,8 +356,8 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
             if (val > max_no_lb) max_no_lb = val;
         }
         // compute sum of exp
-        scalar_t sum_with_lb = 0.;
-        scalar_t sum_no_lb = 0.;
+        scalar_t sum_with_lb(0.);
+        scalar_t sum_no_lb(0.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
@@ -361,7 +366,7 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
             sum_no_lb += expf(val - max_no_lb);
         }
         // compute sum of qx
-        scalar_t sum_qx = 0.;
+        scalar_t sum_qx(0.);
         for (int j{0}; j < dimsize; ++j) {
             if (j == lb) continue;
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
@@ -373,9 +378,9 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
             if (lb == j) {
-                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb - 1.;
+                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb - one;
             } else {
-                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb + (lam / 2.) * ((val + 1. - sum_qx) * expf(val - max_no_lb) / sum_no_lb - (1. / (dimsize - 1)));
+                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb + scalar_t(lam / 2.) * ((val + one - sum_qx) * expf(val - max_no_lb) / sum_no_lb - (one / (dimsize - 1)));
             }
         }
     }

@@ -19,9 +19,12 @@ __global__ void MishForward(const int nthreads,
                             scalar_t *activations) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
+    const scalar_t one(1.);
+    const scalar_t two(2.);
     for (int i{tid}; i < nthreads; i+=stride) {
-        scalar_t s2 = powf(1 + expf(feat[i]), 2);
-        activations[i] = feat[i] * (s2 - 1.) / (s2 + 1.);
+        scalar_t val = feat[i];
+        scalar_t s2 = powf(one + expf(val), two);
+        activations[i] = val * (s2 - one) / (s2 + one);
     }
 }
 
@@ -32,12 +35,14 @@ __global__ void MishBackward(const int nthreads,
                              scalar_t *grad_feat) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
+    const scalar_t one(1.);
+    const scalar_t two(2.);
     for (int i{tid}; i < nthreads; i+=stride) {
-        scalar_t s2 = powf(1 + expf(feat[i]), 2);
-        scalar_t tanh = (s2 - 1.) / (s2 + 1.);
-        scalar_t sigmoid = 1. / (1. + expf(-feat[i]));
-        grad_feat[i] = tanh + feat[i] * (1. - powf(tanh, 2)) * sigmoid;
-        grad_feat[i] *= grad[i];
+        scalar_t val = feat[i];
+        scalar_t s2 = powf(one + expf(val), two);
+        scalar_t tanh = (s2 - one) / (s2 + one);
+        scalar_t sigmoid = one / (one + expf(-val));
+        grad_feat[i] = grad[i] * (tanh + val * (one - powf(tanh, two)) * sigmoid);
     }
 }
 
