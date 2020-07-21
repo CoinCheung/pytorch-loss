@@ -16,7 +16,7 @@
 using std::cout;
 using std::endl;
 
-#define BLOCKSIZE 512
+#define BLOCKSIZE 1024
 
 
 template<typename scalar_t>
@@ -139,6 +139,47 @@ __global__ void LSRLossBackward(const int n_size,
 }
 
 
+template<typename scalar_t>
+__global__ void SpatialLSRLossForward(const int n_size,
+                            const int dimsize, const int m_size,
+                            const scalar_t *log_scores,
+                            const int64_t *labels,
+                            scalar_t *losses,
+                            const int64_t ignore_index, const float smooth) {
+    // shared memory
+    __shared__ int sdata[BLOCKSIZE];
+    sdata[0] = blockIdx.x * blockDim.x + threadIdx.x; //tid 
+    sdata[1] = n_size * m_size; // samplesize
+    sdata[2] = gridDim.x * blockDim.x; // sample_offset
+
+    const scalar_t lb_pos(1.f - smooth);
+    const scalar_t lb_neg = smooth / dimsize;
+
+    for (int i{sdata[0]}; i < sdata[1]; i += sdata[2]) {
+        int lb = static_cast<int>(labels[i]);
+        if (lb == ignore_index) {
+            losses[i] = scalar_t(0.);
+            continue;
+        }
+        int n_idx = i / m_size;
+        int m_idx = i % m_size;
+        scalar_t loss_val(0);
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            if (j == lb) {
+                loss_val -= lb_pos * log_scores[idx];
+            } else {
+                loss_val -= lb_neg * log_scores[idx];
+            }
+        }
+        losses[i] = loss_val;
+    }
+
+}
+
+
+
+
 // cuda forward and backward
 at::Tensor LSR_forward_cuda(const at::Tensor &logits,
                                   const at::Tensor &labels,
@@ -161,26 +202,43 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
         return losses;
     }
 
-    int blockx = 32;
-    while (blockx < dimsize) blockx *= 2;
-    blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
-    int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
-    int gridx = std::min(4096, (int)(samplesize / blocky));
-    int n_shm = blockx * blocky;
-    dim3 block(blockx, blocky);
-    dim3 grid(gridx);
+    if (dimsize < 32 && samplesize > 4096) {
+        int gridx = std::max(std::min(4096, samplesize / BLOCKSIZE), 1);
+        dim3 block(BLOCKSIZE);
+        dim3 grid(gridx);
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "lsr forward", [&] {
+            int shm_size = BLOCKSIZE * sizeof(scalar_t); 
+            SpatialLSRLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                log_scores.contiguous().data<scalar_t>(), 
+                labels.contiguous().data<int64_t>(), 
+                losses.contiguous().data<scalar_t>(),
+                ignore_index, smooth
+            );
+        });
+    } else {
+        int blockx = 32;
+        while (blockx < dimsize) blockx *= 2;
+        blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
+        int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
+        int gridx = std::min(4096, (int)(samplesize / blocky));
+        int n_shm = blockx * blocky;
+        dim3 block(blockx, blocky);
+        dim3 grid(gridx);
 
-    // call kernel
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "lsr forward", [&] {
-        int shm_size = n_shm * sizeof(scalar_t); 
-        LSRLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size, 
-            log_scores.contiguous().data<scalar_t>(), 
-            labels.contiguous().data<int64_t>(), 
-            losses.contiguous().data<scalar_t>(),
-            ignore_index, smooth
-        );
-    });
+        // call kernel
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "lsr forward", [&] {
+            int shm_size = n_shm * sizeof(scalar_t); 
+            LSRLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                log_scores.contiguous().data<scalar_t>(), 
+                labels.contiguous().data<int64_t>(), 
+                losses.contiguous().data<scalar_t>(),
+                ignore_index, smooth
+            );
+        });
+    }
+
     THCudaCheck(cudaGetLastError());
     return losses;
 }

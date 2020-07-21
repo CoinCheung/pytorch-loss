@@ -32,8 +32,8 @@ class LabelSmoothSoftmaxCEV1(nn.Module):
         with torch.no_grad():
             num_classes = logits.size(1)
             label = label.clone().detach()
-            ignore = label == self.lb_ignore
-            n_valid = (ignore == 0).sum()
+            ignore = label.eq(self.lb_ignore)
+            n_valid = ignore.eq(0).sum()
             label[ignore] = 0
             lb_pos, lb_neg = 1. - self.lb_smooth, self.lb_smooth / num_classes
             lb_one_hot = torch.empty_like(logits).fill_(
@@ -61,8 +61,8 @@ class LSRCrossEntropyFunctionV2(torch.autograd.Function):
         num_classes = logits.size(1)
         lb_pos, lb_neg = 1. - lb_smooth, lb_smooth / num_classes
         label = label.clone().detach()
-        ignore = label == lb_ignore
-        n_valid = (label != lb_ignore).sum()
+        ignore = label.eq(lb_ignore)
+        n_valid = ignore.eq(0).sum()
         label[ignore] = 0
         lb_one_hot = torch.empty_like(logits).fill_(
             lb_neg).scatter_(1, label.unsqueeze(1), lb_pos).detach()
@@ -189,7 +189,7 @@ if __name__ == '__main__':
     net2 = Model()
     net2.load_state_dict(net1.state_dict())
     red = 'mean'
-    criteria1 = LabelSmoothSoftmaxCEV3(lb_smooth=0.1, ignore_index=255, reduction=red)
+    criteria1 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, ignore_index=255, reduction=red)
     criteria2 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, ignore_index=255, reduction=red)
     net1.cuda()
     net2.cuda()

@@ -274,7 +274,7 @@ __global__ void SpatialLMarginLossForward(const int n_size,
     for (int i{sdata[0]}; i < sdata[1]; i += sdata[2]) {
         int lb = static_cast<int>(labels[i]);
         if (lb == ignore_index) {
-            losses[i] = 0;
+            losses[i] = scalar_t(0.);
             continue;
         } 
         int n_idx = i / m_size;

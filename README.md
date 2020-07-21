@@ -3,7 +3,7 @@
 My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, triplet-loss, giou-loss, affinity-loss, pc_softmax_cross_entropy, large-margin-softmax(bmvc2019), and dice-loss(both generalized soft dice loss and batch soft dice loss). Maybe this is useful in my future work.
 
 
-Also tried to implement swish and mish activation functions.
+Also tried to implement swish, hard-swish(hswish) and mish activation functions.
 
 Additionally, one-hot function is added.
 
