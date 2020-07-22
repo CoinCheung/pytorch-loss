@@ -102,7 +102,7 @@ __forceinline__ __device__ void compute_reduce_values(
         if (j == lb) continue;
         int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
         scalar_t val = logits[idx];
-        sdata[tid] += expf(val - sdata[blockDim.x]);
+        sdata[tid] += exp(val - sdata[blockDim.x]);
     }
     reduce_sum<scalar_t>(sdata, tid);
     if (tid == 0) sdata[blockDim.x + 2] = sdata[0];
@@ -112,7 +112,7 @@ __forceinline__ __device__ void compute_reduce_values(
     for (int j{tid}; j < dimsize; j += blockDim.x) {
         int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
         scalar_t val = logits[idx];
-        sdata[tid] += expf(val - sdata[blockDim.x + 1]);
+        sdata[tid] += exp(val - sdata[blockDim.x + 1]);
     }
     reduce_sum<scalar_t>(sdata, tid);
     if (tid == 0) sdata[blockDim.x + 3] = sdata[0];
@@ -133,7 +133,7 @@ __forceinline__ __device__ void compute_sum_of_qx(
         if (j == lb) continue;
         int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
         scalar_t val = logits[idx];
-        sdata[tid] += val * expf(val - sdata[blockDim.x]);
+        sdata[tid] += val * exp(val - sdata[blockDim.x]);
     }
     reduce_sum<scalar_t>(sdata, tid);
     if (tid == 0) {
@@ -185,12 +185,12 @@ __global__ void LMarginLossForward(const int n_size,
             scalar_t term(0);
             if (j == lb) {
                 term = -(dval - sdata[blockDim.x + 1]);
-                term += logf(sdata[blockDim.x + 3]);
+                term += log(sdata[blockDim.x + 3]);
             } else {
                 dval -= sdata[blockDim.x];
-                term = expf(dval) / sdata[blockDim.x + 2];
+                term = exp(dval) / sdata[blockDim.x + 2];
                 term -= sdata[blockDim.x + 4];
-                term *= (dval - logf(sdata[blockDim.x + 2]));
+                term *= (dval - log(sdata[blockDim.x + 2]));
                 term *= scalar_t(lam / 2.f);
             }
             sdata[tid] += term;
@@ -244,13 +244,13 @@ __global__ void LMarginLossBackward(const int n_size,
         for (int j{tid}; j < dimsize; j += blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
             scalar_t val = logits[idx];
-            scalar_t pc = expf(val - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3];
+            scalar_t pc = exp(val - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3];
             scalar_t gval;
             if (j == lb) {
                 gval = pc - one;
             } else {
                 gval = val - sdata[blockDim.x + 5] + one;
-                gval *= expf(val - sdata[blockDim.x]) / sdata[blockDim.x + 2];
+                gval *= exp(val - sdata[blockDim.x]) / sdata[blockDim.x + 2];
                 gval = pc + (gval - sdata[blockDim.x + 4]) * scalar_t(lam / 2.);
             }
             grad_logits[idx] = gval;
@@ -298,9 +298,9 @@ __global__ void SpatialLMarginLossForward(const int n_size,
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
-            sum_with_lb += expf(val - max_with_lb);
+            sum_with_lb += exp(val - max_with_lb);
             if (j == lb) continue;
-            sum_no_lb += expf(val - max_no_lb);
+            sum_no_lb += exp(val - max_no_lb);
         }
         // compute loss
         scalar_t loss_val(0.);
@@ -308,9 +308,9 @@ __global__ void SpatialLMarginLossForward(const int n_size,
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
             if (j == lb) {
-                loss_val += - (val - max_with_lb) + logf(sum_with_lb); 
+                loss_val += - (val - max_with_lb) + log(sum_with_lb); 
             } else {
-                loss_val += scalar_t(lam / 2.) * (expf(val - max_no_lb) / sum_no_lb - (scalar_t(1.) / (dimsize - 1))) * (val - max_no_lb - logf(sum_no_lb));
+                loss_val += scalar_t(lam / 2.) * (exp(val - max_no_lb) / sum_no_lb - (scalar_t(1.) / (dimsize - 1))) * (val - max_no_lb - log(sum_no_lb));
             }
         }
         losses[i] = loss_val;
@@ -363,9 +363,9 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
-            sum_with_lb += expf(val - max_with_lb);
+            sum_with_lb += exp(val - max_with_lb);
             if (j == lb) continue;
-            sum_no_lb += expf(val - max_no_lb);
+            sum_no_lb += exp(val - max_no_lb);
         }
         // compute sum of qx
         scalar_t sum_qx(0.);
@@ -373,16 +373,16 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
             if (j == lb) continue;
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
-            sum_qx += val * expf(val - max_no_lb) / sum_no_lb;
+            sum_qx += val * exp(val - max_no_lb) / sum_no_lb;
         }
         // compute grads
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
             if (lb == j) {
-                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb - one;
+                grad_logits[idx] = exp(val - max_with_lb) / sum_with_lb - one;
             } else {
-                grad_logits[idx] = expf(val - max_with_lb) / sum_with_lb + scalar_t(lam / 2.) * ((val + one - sum_qx) * expf(val - max_no_lb) / sum_no_lb - (one / (dimsize - 1)));
+                grad_logits[idx] = exp(val - max_with_lb) / sum_with_lb + scalar_t(lam / 2.) * ((val + one - sum_qx) * exp(val - max_no_lb) / sum_no_lb - (one / (dimsize - 1)));
             }
         }
     }
@@ -394,8 +394,8 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
                                   const int64_t ignore_index,
                                   const float lam) {
     // CHECK type and shape
-    AT_ASSERTM(logits.type().is_cuda(), "logits should be cuda");
-    AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
+    AT_ASSERTM(logits.device().type() == c10::kCUDA, "logits should be cuda");
+    AT_ASSERTM(labels.device().type() == c10::kCUDA, "labels should be cuda");
 
     const int n_size = logits.size(0);
     const int dimsize = logits.size(1);
@@ -418,9 +418,9 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
             int shm_size = BLOCKSIZE * sizeof(scalar_t);
             SpatialLMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                logits.contiguous().data<scalar_t>(), 
-                labels.contiguous().data<int64_t>(), 
-                losses.contiguous().data<scalar_t>(),
+                logits.contiguous().data_ptr<scalar_t>(), 
+                labels.contiguous().data_ptr<int64_t>(), 
+                losses.contiguous().data_ptr<scalar_t>(),
                 ignore_index, lam 
             );
         });
@@ -438,9 +438,9 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
             int shm_size = n_shm * sizeof(scalar_t);
             LMarginLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                logits.contiguous().data<scalar_t>(), 
-                labels.contiguous().data<int64_t>(), 
-                losses.contiguous().data<scalar_t>(),
+                logits.contiguous().data_ptr<scalar_t>(), 
+                labels.contiguous().data_ptr<int64_t>(), 
+                losses.contiguous().data_ptr<scalar_t>(),
                 ignore_index, lam 
             );
         });
@@ -456,8 +456,8 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
                                   const int64_t ignore_index,
                                   const float lam) {
     // CHECK type and shape
-    AT_ASSERTM(logits.type().is_cuda(), "logits should be cuda");
-    AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
+    AT_ASSERTM(logits.device().type() == c10::kCUDA, "logits should be cuda");
+    AT_ASSERTM(labels.device().type() == c10::kCUDA, "labels should be cuda");
 
     const int n_size = logits.size(0);
     const int dimsize = logits.size(1);
@@ -479,9 +479,9 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
             int shm_size = BLOCKSIZE * sizeof(scalar_t);
             SpatialLMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                grad_logits.contiguous().data<scalar_t>(),
-                logits.contiguous().data<scalar_t>(), 
-                labels.contiguous().data<int64_t>(), 
+                grad_logits.contiguous().data_ptr<scalar_t>(),
+                logits.contiguous().data_ptr<scalar_t>(), 
+                labels.contiguous().data_ptr<int64_t>(), 
                 ignore_index, lam 
             );
         });
@@ -500,9 +500,9 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
             int shm_size = n_shm * sizeof(scalar_t); 
             LMarginLossBackward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                grad_logits.contiguous().data<scalar_t>(),
-                logits.contiguous().data<scalar_t>(), 
-                labels.contiguous().data<int64_t>(), 
+                grad_logits.contiguous().data_ptr<scalar_t>(),
+                logits.contiguous().data_ptr<scalar_t>(), 
+                labels.contiguous().data_ptr<int64_t>(), 
                 ignore_index, lam 
             );
         });
@@ -516,7 +516,7 @@ at::Tensor large_margin_forward(const at::Tensor &logits,
                              const at::Tensor &labels,
                              const float lam,
                              const int64_t ignore_index) {
-    if (!(logits.type().is_cuda() && labels.type().is_cuda())) {
+    if ((logits.device().type() != c10::kCUDA) || (labels.device().type() != c10::kCUDA)) {
         AT_ERROR("this large margin loss only supports gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());
@@ -529,7 +529,7 @@ at::Tensor large_margin_backward(const at::Tensor &logits,
                                   const float lam,
                                   const int64_t ignore_index) {
     // TODO: try AT_ASSERTM
-    if (!(logits.type().is_cuda() && labels.type().is_cuda())) {
+    if ((logits.device().type() != c10::kCUDA) || (labels.device().type() != c10::kCUDA)) {
         AT_ERROR("this large margin loss only supports gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());

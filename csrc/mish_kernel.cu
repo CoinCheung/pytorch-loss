@@ -19,12 +19,9 @@ __global__ void MishForward(const int nthreads,
                             scalar_t *activations) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
-    const scalar_t one(1.);
-    const scalar_t two(2.);
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t val = feat[i];
-        scalar_t s2 = powf(one + expf(val), two);
-        activations[i] = val * (s2 - one) / (s2 + one);
+        activations[i] = val * tanh(log1p(exp(val)));
     }
 }
 
@@ -39,10 +36,8 @@ __global__ void MishBackward(const int nthreads,
     const scalar_t two(2.);
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t val = feat[i];
-        scalar_t s2 = powf(one + expf(val), two);
-        scalar_t tanh = (s2 - one) / (s2 + one);
-        scalar_t sigmoid = one / (one + expf(-val));
-        grad_feat[i] = grad[i] * (tanh + val * (one - powf(tanh, two)) * sigmoid);
+        scalar_t xtanh = tanh(log1p(exp(val)));
+        grad_feat[i] = grad[i] * (xtanh + val * (one - powf(xtanh, two)) * one / (one + exp(-val)));
     }
 }
 
@@ -50,7 +45,7 @@ __global__ void MishBackward(const int nthreads,
 // cuda forward and backward
 at::Tensor Mish_forward_cuda(const at::Tensor &feat) {
     // CHECK type and shape
-    AT_ASSERTM(feat.type().is_cuda(), "feat should be cuda");
+    AT_ASSERTM(feat.device().type() == c10::kCUDA, "feat should be cuda");
 
     // allocate memory and cuda grid/block
     auto activations = at::empty_like(feat);
@@ -69,8 +64,8 @@ at::Tensor Mish_forward_cuda(const at::Tensor &feat) {
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(activations.scalar_type(), "mish forward", [&] {
         MishForward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
-            feat.contiguous().data<scalar_t>(), 
-            activations.contiguous().data<scalar_t>()
+            feat.contiguous().data_ptr<scalar_t>(), 
+            activations.contiguous().data_ptr<scalar_t>()
         );
     });
     THCudaCheck(cudaGetLastError());
@@ -80,8 +75,8 @@ at::Tensor Mish_forward_cuda(const at::Tensor &feat) {
 
 at::Tensor Mish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
     // CHECK type and shape
-    AT_ASSERTM(grad.type().is_cuda(), "grad should be cuda");
-    AT_ASSERTM(feat.type().is_cuda(), "feat should be cuda");
+    AT_ASSERTM(grad.device().type() == c10::kCUDA, "grad should be cuda");
+    AT_ASSERTM(feat.device().type() == c10::kCUDA, "feat should be cuda");
 
     // allocate memory and cuda grid/block
     auto grad_feat = at::empty_like(feat);
@@ -99,9 +94,9 @@ at::Tensor Mish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_feat.scalar_type(), "mish backwrd", [&] {
         MishBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
-            feat.contiguous().data<scalar_t>(), 
-            grad.contiguous().data<scalar_t>(),
-            grad_feat.contiguous().data<scalar_t>()
+            feat.contiguous().data_ptr<scalar_t>(), 
+            grad.contiguous().data_ptr<scalar_t>(),
+            grad_feat.contiguous().data_ptr<scalar_t>()
         );
     });
     THCudaCheck(cudaGetLastError());
@@ -110,7 +105,7 @@ at::Tensor Mish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
 
 // python inferface
 at::Tensor Mish_forward(const at::Tensor &feat) {
-    if (!feat.type().is_cuda()) {
+    if (feat.device().type() != c10::kCUDA) {
         AT_ERROR("this mish function only supports gpu mode\n");
     } 
     at::DeviceGuard guard(feat.device());
@@ -119,7 +114,7 @@ at::Tensor Mish_forward(const at::Tensor &feat) {
 
 at::Tensor Mish_backward(const at::Tensor &grad, const at::Tensor &feat) {
     // TODO: try AT_ASSERTM
-    if (!feat.type().is_cuda()) {
+    if (feat.device().type() != c10::kCUDA) {
         AT_ERROR("this mish function only supports gpu mode\n");
     } 
     at::DeviceGuard guard(feat.device());
