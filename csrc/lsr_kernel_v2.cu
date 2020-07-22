@@ -72,6 +72,7 @@ __global__ void LSRLossForward(const int n_size,
     int shm_offset = blockDim.x;
     int sample_offset = gridDim.x * blockDim.y;
     sdata = sdata + shm_offset * threadIdx.y;
+    scalar_t zero(0.f);
 
     int tid = threadIdx.x;
     int sample_id = blockIdx.x * blockDim.y + threadIdx.y;
@@ -85,11 +86,11 @@ __global__ void LSRLossForward(const int n_size,
         int64_t lb = labels[i];
 
         if (lb == ignore_index) {
-            if (tid == 0) losses[i] = 0;
+            if (tid == 0) losses[i] = zero;
             continue;
         }
 
-        sdata[tid] = 0;
+        sdata[tid] = zero;
         __syncthreads();
         for (int j{tid}; j < dimsize; j += blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;

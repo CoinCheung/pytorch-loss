@@ -155,6 +155,7 @@ __global__ void LMarginLossForward(const int n_size,
     extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
     scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
     sdata = sdata + (blockDim.x + 8) * threadIdx.y;
+    scalar_t zero(0.f);
 
     int tid = threadIdx.x;
     int sample_id = blockIdx.x * blockDim.y + threadIdx.y;
@@ -168,7 +169,7 @@ __global__ void LMarginLossForward(const int n_size,
     for (int i{sample_id}; i < samplesize; i += sample_offset) {
         int64_t lb = labels[i];
         if (lb == ignore_index) {
-            if (tid == 0) losses[i] = 0;
+            if (tid == 0) losses[i] = zero;
             continue;
         } 
         int n_idx = i / m_size;
@@ -176,7 +177,7 @@ __global__ void LMarginLossForward(const int n_size,
         compute_reduce_values<scalar_t>(logits, sdata,
                 dimsize, m_size, n_idx, m_idx, lb, tid);
 
-        sdata[tid] = scalar_t(0.);
+        sdata[tid] = zero;
         __syncthreads();
         for (int j{tid}; j < dimsize; j+=blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
@@ -211,6 +212,7 @@ __global__ void LMarginLossBackward(const int n_size,
     extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
     scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
     sdata = sdata + (blockDim.x + 8) * threadIdx.y;
+    scalar_t zero(0.f);
 
     int tid = threadIdx.x;
     int sample_id = blockIdx.x * blockDim.y + threadIdx.y;
@@ -229,7 +231,7 @@ __global__ void LMarginLossBackward(const int n_size,
         if (lb == ignore_index) {
             for (int j{tid}; j < dimsize; j += blockDim.x) {
                 int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-                grad_logits[idx] = 0;
+                grad_logits[idx] = zero;
             }
             continue;
         } 
@@ -274,15 +276,15 @@ __global__ void SpatialLMarginLossForward(const int n_size,
     for (int i{sdata[0]}; i < sdata[1]; i += sdata[2]) {
         int lb = static_cast<int>(labels[i]);
         if (lb == ignore_index) {
-            losses[i] = scalar_t(0.);
+            losses[i] = scalar_t(0.f);
             continue;
         } 
         int n_idx = i / m_size;
         int m_idx = i % m_size;
 
         // compute max
-        scalar_t max_with_lb(-10000.);
-        scalar_t max_no_lb(-10000.);
+        scalar_t max_with_lb(-10000.f);
+        scalar_t max_no_lb(-10000.f);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
@@ -340,7 +342,7 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
         if (lb == ignore_index) {
             for (int j{0}; j < dimsize; ++j) {
                 int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
-                grad_logits[idx] = 0;
+                grad_logits[idx] = scalar_t(0.f);
             }
             continue;
         } 
