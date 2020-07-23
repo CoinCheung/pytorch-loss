@@ -71,12 +71,12 @@ __global__ void OHEMGetScores(const int n_size,
         int64_t lb = labels[i];
 
         if (lb == ignore_index) {
-            if (tid == 0) scores[i] = 1.;
+            if (tid == 0) scores[i] = scalar_t(1.);
             continue;
         }
 
         // obtain max
-        sdata[tid] = -10000.;
+        sdata[tid] = scalar_t(-10000.);
         __syncthreads();
         for (int j{tid}; j < dimsize; j += blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
@@ -124,19 +124,19 @@ __global__ void OHEMGetScoresSpatial(const int n_size,
         int lb = static_cast<int>(labels[i]);
 
         if (lb == ignore_index) {
-            scores[i] = 1.;
+            scores[i] = scalar_t(1.);
             continue;
         }
 
         // obtain max
-        scalar_t max_val = -10000.;
+        scalar_t max_val = scalar_t(-10000.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[idx];
             if (val > max_val) max_val = val;
         }
         // obtain sum exp
-        scalar_t sum_exp = 0.;
+        scalar_t sum_exp = scalar_t(0.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             sum_exp += expf(logits[idx] - max_val);
@@ -170,8 +170,8 @@ at::Tensor Score_ohem_label_cuda(const at::Tensor &logits,
                                   const float score_thresh,
                                   const int64_t n_min) {
     // CHECK type and shape
-    AT_ASSERTM(logits.type().is_cuda(), "logits should be cuda");
-    AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
+    AT_ASSERTM(logits.device().type() == c10::kCUDA, "logits should be cuda");
+    AT_ASSERTM(labels.device().type() == c10::kCUDA, "labels should be cuda");
 
     const int n_size = logits.size(0);
     const int dimsize = logits.size(1);
@@ -200,9 +200,9 @@ at::Tensor Score_ohem_label_cuda(const at::Tensor &logits,
         
             OHEMGetScoresSpatial<scalar_t><<<grid1, block1, 0, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                logits.contiguous().data<scalar_t>(), 
-                scores.contiguous().data<scalar_t>(),
-                labels.contiguous().data<int64_t>(), 
+                logits.contiguous().data_ptr<scalar_t>(), 
+                scores.contiguous().data_ptr<scalar_t>(),
+                labels.contiguous().data_ptr<int64_t>(), 
                 thrust::raw_pointer_cast(&idx[0]),
                 ignore_index
             );
@@ -224,9 +224,9 @@ at::Tensor Score_ohem_label_cuda(const at::Tensor &logits,
             int shm_size = n_shm * sizeof(scalar_t); 
             OHEMGetScores<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                logits.contiguous().data<scalar_t>(), 
-                scores.contiguous().data<scalar_t>(),
-                labels.contiguous().data<int64_t>(), 
+                logits.contiguous().data_ptr<scalar_t>(), 
+                scores.contiguous().data_ptr<scalar_t>(),
+                labels.contiguous().data_ptr<int64_t>(), 
                 thrust::raw_pointer_cast(&idx[0]),
                 ignore_index
             );
@@ -242,15 +242,15 @@ at::Tensor Score_ohem_label_cuda(const at::Tensor &logits,
 
         thrust::sort_by_key(
             thrust::device,
-            scores.contiguous().data<scalar_t>(),
-            scores.contiguous().data<scalar_t>() + samplesize,
+            scores.contiguous().data_ptr<scalar_t>(),
+            scores.contiguous().data_ptr<scalar_t>() + samplesize,
             &idx[0]
         );
 
         OHEMSetLabels<scalar_t><<<grid2, block2, 0, at::cuda::getCurrentCUDAStream()>>>(
             samplesize, thrust::raw_pointer_cast(&idx[0]), 
-            scores.contiguous().data<scalar_t>(),
-            ohem_label.contiguous().data<int64_t>(), 
+            scores.contiguous().data_ptr<scalar_t>(),
+            ohem_label.contiguous().data_ptr<int64_t>(), 
             ignore_index, score_thresh, n_min
         );
     });
@@ -265,7 +265,7 @@ at::Tensor Score_ohem_label(const at::Tensor &logits,
                          const int64_t ignore_index,
                          const float score_thresh,
                          const int64_t n_min) {
-    if (!(logits.type().is_cuda() && labels.type().is_cuda())) {
+    if ((logits.device().type() != c10::kCUDA) || (labels.device().type() != c10::kCUDA)) {
         AT_ERROR("this ohem method only supports gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());
