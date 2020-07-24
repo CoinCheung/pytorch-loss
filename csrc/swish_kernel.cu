@@ -49,7 +49,7 @@ __global__ void SwishBackward(const int nthreads,
 }
 
 
-
+namespace swish_space {
 template<typename scalar_t>
 __forceinline__ __device__ scalar_t ReLU6(scalar_t val) {
     const scalar_t zero(0.);
@@ -59,6 +59,8 @@ __forceinline__ __device__ scalar_t ReLU6(scalar_t val) {
     if (res > six) res = six;
     return res;
 }
+}
+
 
 
 template<typename scalar_t>
@@ -71,7 +73,7 @@ __global__ void HSwishForward(const int nthreads,
         const scalar_t three(3.);
         const scalar_t one_six(1. / 6.);
         scalar_t val = feat[i];
-        activations[i] = val * ReLU6(val + three) * one_six;
+        activations[i] = val * swish_space::ReLU6(val + three) * one_six;
     }
 }
 
@@ -88,7 +90,7 @@ __global__ void HSwishBackward(const int nthreads,
         const scalar_t three(3.);
         const scalar_t one_six(1. / 6.);
         scalar_t val = feat[i];
-        grad_feat[i] = (ReLU6(val + three) * one_six + ((val > _three && val < three) ? one_six : zero) * val) * grad[i];
+        grad_feat[i] = (swish_space::ReLU6(val + three) * one_six + ((val > _three && val < three) ? one_six : zero) * val) * grad[i];
     }
 }
 
@@ -96,7 +98,7 @@ __global__ void HSwishBackward(const int nthreads,
 // cuda forward and backward
 at::Tensor Swish_forward_cuda(const at::Tensor &feat) {
     // CHECK type and shape
-    AT_ASSERTM(feat.type().is_cuda(), "feat should be cuda");
+    AT_ASSERTM(feat.device().type() == c10::kCUDA, "feat should be cuda");
 
     // allocate memory and cuda grid/block
     auto activations = at::empty_like(feat);
@@ -115,8 +117,8 @@ at::Tensor Swish_forward_cuda(const at::Tensor &feat) {
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(activations.scalar_type(), "swish forward", [&] {
         SwishForward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
-            feat.contiguous().data<scalar_t>(), 
-            activations.contiguous().data<scalar_t>()
+            feat.contiguous().data_ptr<scalar_t>(), 
+            activations.contiguous().data_ptr<scalar_t>()
         );
     });
     THCudaCheck(cudaGetLastError());
@@ -126,8 +128,8 @@ at::Tensor Swish_forward_cuda(const at::Tensor &feat) {
 
 at::Tensor Swish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
     // CHECK type and shape
-    AT_ASSERTM(grad.type().is_cuda(), "grad should be cuda");
-    AT_ASSERTM(feat.type().is_cuda(), "feat should be cuda");
+    AT_ASSERTM(grad.device().type() == c10::kCUDA, "grad should be cuda");
+    AT_ASSERTM(feat.device().type() == c10::kCUDA, "feat should be cuda");
 
     // allocate memory and cuda grid/block
     auto grad_feat = at::empty_like(feat);
@@ -147,9 +149,9 @@ at::Tensor Swish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_feat.scalar_type(), "swish backwrd", [&] {
         SwishBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
-            feat.contiguous().data<scalar_t>(), 
-            grad.contiguous().data<scalar_t>(),
-            grad_feat.contiguous().data<scalar_t>()
+            feat.contiguous().data_ptr<scalar_t>(), 
+            grad.contiguous().data_ptr<scalar_t>(),
+            grad_feat.contiguous().data_ptr<scalar_t>()
         );
     });
     THCudaCheck(cudaGetLastError());
@@ -159,7 +161,7 @@ at::Tensor Swish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
 
 at::Tensor HSwish_forward_cuda(const at::Tensor &feat) {
     // CHECK type and shape
-    AT_ASSERTM(feat.type().is_cuda(), "feat should be cuda");
+    AT_ASSERTM(feat.device().type() == c10::kCUDA, "feat should be cuda");
 
     // allocate memory and cuda grid/block
     auto activations = at::empty_like(feat);
@@ -178,8 +180,8 @@ at::Tensor HSwish_forward_cuda(const at::Tensor &feat) {
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(activations.scalar_type(), "hswish forward", [&] {
         HSwishForward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
-            feat.contiguous().data<scalar_t>(), 
-            activations.contiguous().data<scalar_t>()
+            feat.contiguous().data_ptr<scalar_t>(), 
+            activations.contiguous().data_ptr<scalar_t>()
         );
     });
     THCudaCheck(cudaGetLastError());
@@ -189,8 +191,8 @@ at::Tensor HSwish_forward_cuda(const at::Tensor &feat) {
 
 at::Tensor HSwish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
     // CHECK type and shape
-    AT_ASSERTM(grad.type().is_cuda(), "grad should be cuda");
-    AT_ASSERTM(feat.type().is_cuda(), "feat should be cuda");
+    AT_ASSERTM(grad.device().type() == c10::kCUDA, "grad should be cuda");
+    AT_ASSERTM(feat.device().type() == c10::kCUDA, "feat should be cuda");
 
     // allocate memory and cuda grid/block
     auto grad_feat = at::empty_like(feat);
@@ -209,9 +211,9 @@ at::Tensor HSwish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_feat.scalar_type(), "hswish backwrd", [&] {
         HSwishBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             num_samples, 
-            feat.contiguous().data<scalar_t>(), 
-            grad.contiguous().data<scalar_t>(),
-            grad_feat.contiguous().data<scalar_t>()
+            feat.contiguous().data_ptr<scalar_t>(), 
+            grad.contiguous().data_ptr<scalar_t>(),
+            grad_feat.contiguous().data_ptr<scalar_t>()
         );
     });
     THCudaCheck(cudaGetLastError());
@@ -220,7 +222,7 @@ at::Tensor HSwish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) 
 
 // python inferface
 at::Tensor Swish_forward(const at::Tensor &feat) {
-    if (!feat.type().is_cuda()) {
+    if (feat.device().type() != c10::kCUDA) {
         AT_ERROR("this swish function only supports gpu mode\n");
     } 
     at::DeviceGuard guard(feat.device());
@@ -229,7 +231,7 @@ at::Tensor Swish_forward(const at::Tensor &feat) {
 
 at::Tensor Swish_backward(const at::Tensor &grad, const at::Tensor &feat) {
     // TODO: try AT_ASSERTM
-    if (!feat.type().is_cuda()) {
+    if (feat.device().type() != c10::kCUDA) {
         AT_ERROR("this swish function only supports gpu mode\n");
     } 
     at::DeviceGuard guard(feat.device());
@@ -237,7 +239,7 @@ at::Tensor Swish_backward(const at::Tensor &grad, const at::Tensor &feat) {
 }
 
 at::Tensor HSwish_forward(const at::Tensor &feat) {
-    if (!feat.type().is_cuda()) {
+    if (feat.device().type() != c10::kCUDA) {
         AT_ERROR("this swish function only supports gpu mode\n");
     } 
     at::DeviceGuard guard(feat.device());
@@ -246,7 +248,7 @@ at::Tensor HSwish_forward(const at::Tensor &feat) {
 
 at::Tensor HSwish_backward(const at::Tensor &grad, const at::Tensor &feat) {
     // TODO: try AT_ASSERTM
-    if (!feat.type().is_cuda()) {
+    if (feat.device().type() != c10::kCUDA) {
         AT_ERROR("this swish function only supports gpu mode\n");
     } 
     at::DeviceGuard guard(feat.device());

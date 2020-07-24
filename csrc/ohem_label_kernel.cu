@@ -21,6 +21,8 @@ using std::endl;
 #define BLOCKSIZE 1024
 
 
+namespace ohem_space {
+
 template<typename scalar_t>
 __forceinline__ __device__ void reduce_sum(scalar_t *sdata, int blocksize, int tid) {
     __syncthreads();
@@ -41,6 +43,7 @@ __forceinline__ __device__ void reduce_max(scalar_t* sdata, int blocksize, int t
         }
         __syncthreads();
     }
+}
 }
 
 
@@ -84,7 +87,7 @@ __global__ void OHEMGetScores(const int n_size,
             if (val > sdata[tid]) sdata[tid] = val;
         }
         __syncthreads();
-        reduce_max<scalar_t>(sdata, blockDim.x, tid);
+        ohem_space::reduce_max<scalar_t>(sdata, blockDim.x, tid);
         scalar_t max_val = sdata[0];
 
         // obtain exp sum
@@ -95,7 +98,7 @@ __global__ void OHEMGetScores(const int n_size,
             sdata[tid] += expf(logits[idx] - max_val);
         }
         __syncthreads();
-        reduce_sum<scalar_t>(sdata, blockDim.x, tid);
+        ohem_space::reduce_sum<scalar_t>(sdata, blockDim.x, tid);
         if (tid == 0) {
             int idx = n_idx * dimsize * m_size + lb * m_size + m_idx;
             scores[i] = expf(logits[idx] - max_val) / sdata[0];
@@ -158,7 +161,7 @@ __global__ void OHEMSetLabels(const int samplesize,
     int sample_offset = gridDim.x * blockDim.x;
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    for (int i{n_min + tid}; i < samplesize; i += sample_offset) {
+    for (int i{static_cast<int>(n_min) + tid}; i < samplesize; i += sample_offset) {
         if (scores[i] > score_thresh) ohem_label[idx[i]] = ignore_index;
     }
 }

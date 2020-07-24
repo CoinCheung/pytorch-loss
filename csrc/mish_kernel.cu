@@ -12,6 +12,8 @@
 #include <cfloat>
 
 
+#define EXP_THRESH 20.
+
 // kernel function for forward and backward
 template<typename scalar_t>
 __global__ void MishForward(const int nthreads,
@@ -21,7 +23,11 @@ __global__ void MishForward(const int nthreads,
     int stride = blockDim.x * gridDim.x;
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t val = feat[i];
-        activations[i] = val * tanh(log1p(exp(val)));
+        if (val > scalar_t(EXP_THRESH)) {
+            activations[i] = val * tanh(val);
+        } else {
+            activations[i] = val * tanh(log1p(exp(val)));
+        }
     }
 }
 
@@ -36,7 +42,12 @@ __global__ void MishBackward(const int nthreads,
     const scalar_t two(2.);
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t val = feat[i];
-        scalar_t xtanh = tanh(log1p(exp(val)));
+        scalar_t xtanh;
+        if (val > scalar_t(EXP_THRESH)) {
+            xtanh = tanh(val);
+        } else {
+            xtanh = tanh(log1p(exp(val)));
+        }
         grad_feat[i] = grad[i] * (xtanh + val * (one - powf(xtanh, two)) * one / (one + exp(-val)));
     }
 }

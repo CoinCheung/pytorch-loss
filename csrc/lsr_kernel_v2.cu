@@ -19,6 +19,8 @@ using std::endl;
 #define BLOCKSIZE 1024
 
 
+namespace lsr_space {
+
 template<typename scalar_t>
 __forceinline__ __device__ void reduce_sum(scalar_t *sdata, int blocksize, int tid) {
     __syncthreads();
@@ -56,6 +58,7 @@ __forceinline__ __device__ void reduce_sum(scalar_t *sdata, int blocksize, int t
     // }
 }
 
+}
 
 // kernel function for forward and backward
 template<typename scalar_t>
@@ -100,7 +103,7 @@ __global__ void LSRLossForward(const int n_size,
                 sdata[tid] += -log_scores[idx] * lb_neg;
             }
         }
-        reduce_sum<scalar_t>(sdata, blockDim.x, tid);
+        lsr_space::reduce_sum<scalar_t>(sdata, blockDim.x, tid);
         if (tid == 0) losses[i] = sdata[0];
     }
 }
@@ -187,8 +190,8 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
                                   const int64_t ignore_index,
                                   const float smooth) {
     // CHECK type and shape
-    AT_ASSERTM(logits.type().is_cuda(), "logits should be cuda");
-    AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
+    AT_ASSERTM(logits.device().type() == c10::kCUDA, "logits should be cuda");
+    AT_ASSERTM(labels.device().type() == c10::kCUDA, "labels should be cuda");
 
     const int n_size = logits.size(0);
     const int dimsize = logits.size(1);
@@ -211,9 +214,9 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
             int shm_size = BLOCKSIZE * sizeof(scalar_t); 
             SpatialLSRLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                log_scores.contiguous().data<scalar_t>(), 
-                labels.contiguous().data<int64_t>(), 
-                losses.contiguous().data<scalar_t>(),
+                log_scores.contiguous().data_ptr<scalar_t>(), 
+                labels.contiguous().data_ptr<int64_t>(), 
+                losses.contiguous().data_ptr<scalar_t>(),
                 ignore_index, smooth
             );
         });
@@ -232,9 +235,9 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
             int shm_size = n_shm * sizeof(scalar_t); 
             LSRLossForward<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
                 n_size, dimsize, m_size, 
-                log_scores.contiguous().data<scalar_t>(), 
-                labels.contiguous().data<int64_t>(), 
-                losses.contiguous().data<scalar_t>(),
+                log_scores.contiguous().data_ptr<scalar_t>(), 
+                labels.contiguous().data_ptr<int64_t>(), 
+                losses.contiguous().data_ptr<scalar_t>(),
                 ignore_index, smooth
             );
         });
@@ -250,8 +253,8 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
                               const int64_t ignore_index,
                               const float smooth) {
     // CHECK type and shape
-    AT_ASSERTM(logits.type().is_cuda(), "logits should be cuda");
-    AT_ASSERTM(labels.type().is_cuda(), "labels should be cuda");
+    AT_ASSERTM(logits.device().type() == c10::kCUDA, "logits should be cuda");
+    AT_ASSERTM(labels.device().type() == c10::kCUDA, "labels should be cuda");
 
     const int n_size = logits.size(0);
     const int dimsize = logits.size(1);
@@ -273,8 +276,8 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lsr backwrd", [&] {
         LSRLossBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
             n_size, dimsize, m_size, 
-            grad_logits.contiguous().data<scalar_t>(),
-            labels.contiguous().data<int64_t>(), 
+            grad_logits.contiguous().data_ptr<scalar_t>(),
+            labels.contiguous().data_ptr<int64_t>(), 
             ignore_index, smooth
         );
     });
@@ -287,7 +290,7 @@ at::Tensor LSR_forward(const at::Tensor &logits,
                          const at::Tensor &labels,
                          const int64_t ignore_index,
                          const float smooth) {
-    if (!(logits.type().is_cuda() && labels.type().is_cuda())) {
+    if ((logits.device().type() != c10::kCUDA) || (labels.device().type() != c10::kCUDA)) {
         AT_ERROR("this LSR loss only supports gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());
@@ -299,7 +302,7 @@ at::Tensor LSR_backward(const at::Tensor &logits,
                       const int64_t ignore_index,
                       const float smooth) {
     // TODO: try AT_ASSERTM
-    if (!(logits.type().is_cuda() && labels.type().is_cuda())) {
+    if ((logits.device().type() != c10::kCUDA) || (labels.device().type() != c10::kCUDA)) {
         AT_ERROR("this LSR loss only supports gpu mode\n");
     } 
     at::DeviceGuard guard(logits.device());

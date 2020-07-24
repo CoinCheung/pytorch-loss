@@ -41,6 +41,8 @@ const int max_threads = 1024;
 // consider max_active_blocks when assign grid blocks, the total number of blocks should not be greater than max_active_blocks which is multiProcessCount
 
 
+namespace large_margin_space {
+
 template<typename scalar_t>
 __forceinline__ __device__ void reduce_max(scalar_t* sdata, int tid) {
     __syncthreads();
@@ -63,7 +65,6 @@ __forceinline__ __device__ void reduce_sum(scalar_t* sdata, int tid) {
         __syncthreads();
     }
 }
-
 
 template<typename scalar_t>
 __forceinline__ __device__ void compute_reduce_values(
@@ -141,6 +142,9 @@ __forceinline__ __device__ void compute_sum_of_qx(
     }
 }
 
+}
+
+
 
 // kernel function for forward and backward
 template<typename scalar_t>
@@ -174,7 +178,7 @@ __global__ void LMarginLossForward(const int n_size,
         } 
         int n_idx = i / m_size;
         int m_idx = i % m_size;
-        compute_reduce_values<scalar_t>(logits, sdata,
+        large_margin_space::compute_reduce_values<scalar_t>(logits, sdata,
                 dimsize, m_size, n_idx, m_idx, lb, tid);
 
         sdata[tid] = zero;
@@ -195,7 +199,7 @@ __global__ void LMarginLossForward(const int n_size,
             }
             sdata[tid] += term;
         }
-        reduce_sum<scalar_t>(sdata, tid);
+        large_margin_space::reduce_sum<scalar_t>(sdata, tid);
         if (tid == 0) losses[i] = sdata[0];
     }
 }
@@ -235,9 +239,9 @@ __global__ void LMarginLossBackward(const int n_size,
             }
             continue;
         } 
-        compute_reduce_values<scalar_t>(logits, sdata,
+        large_margin_space::compute_reduce_values<scalar_t>(logits, sdata,
                 dimsize, m_size, n_idx, m_idx, lb, tid);
-        compute_sum_of_qx<scalar_t>(logits, sdata,
+        large_margin_space::compute_sum_of_qx<scalar_t>(logits, sdata,
                 dimsize, m_size, n_idx, m_idx, lb, tid);
 
         const scalar_t one(1.f);
