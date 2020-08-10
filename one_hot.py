@@ -39,6 +39,7 @@ def convert_to_one_hot(x, minleng, ignore_idx=-1):
 
 
 
+
 if __name__ == "__main__":
     x = torch.randint(0, 3, (3, 4))
     print(x)

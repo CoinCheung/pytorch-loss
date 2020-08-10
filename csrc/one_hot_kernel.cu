@@ -57,29 +57,6 @@ __device__ __forceinline__ void reduce_op(
     }
 }
 
-// TODO: make these reduce op together
-template<typename scalar_t>
-__forceinline__ __device__ void reduce_max(scalar_t* sdata, int blocksize, int tid) {
-    __syncthreads();
-    for (int s{blocksize / 2}; s > 0; s >>= 1) {
-        if (tid < s) {
-            if (sdata[tid] < sdata[tid + s]) sdata[tid] = sdata[tid + s];
-        }
-        __syncthreads();
-    }
-}
-
-
-template<typename scalar_t>
-__forceinline__ __device__ void reduce_min(scalar_t* sdata, int blocksize, int tid) {
-    __syncthreads();
-    for (int s{blocksize / 2}; s > 0; s >>= 1) {
-        if (tid < s) {
-            if (sdata[tid] > sdata[tid + s]) sdata[tid] = sdata[tid + s];
-        }
-        __syncthreads();
-    }
-}
 
 __global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
         int64_t ignore_index) {
@@ -100,9 +77,7 @@ __global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
         }
         if (min > val) min = val;
     }
-    // reduce_max<int64_t>(sdata, BLOCKSIZE, threadIdx.x);
-    one_hot_space::reduce_op<one_hot_space::max_op, int64_t>(
-            sdata, BLOCKSIZE, one_hot_space::max_op<int64_t>());
+    reduce_op<max_op, int64_t>(sdata, BLOCKSIZE, max_op<int64_t>());
     if (threadIdx.x == 0) {
         buffer[blockIdx.x] = sdata[0];
     }
@@ -114,7 +89,7 @@ __global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
                 sdata[threadIdx.x] = buffer[i];
             }
         }
-        reduce_max<int64_t>(sdata, BLOCKSIZE, threadIdx.x);
+        reduce_op<max_op, int64_t>(sdata, BLOCKSIZE, max_op<int64_t>());
         if (threadIdx.x == 0) {
             buffer[gridDim.x] = sdata[0];
         }
@@ -124,7 +99,7 @@ __global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
     sdata[threadIdx.x] = min;
     __syncthreads();
 
-    reduce_min<int64_t>(sdata, BLOCKSIZE, threadIdx.x);
+    reduce_op<min_op, int64_t>(sdata, BLOCKSIZE, min_op<int64_t>());
     if (threadIdx.x == 0) {
         buffer[blockIdx.x] = sdata[0];
     }
@@ -137,7 +112,7 @@ __global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
             }
         }
         __syncthreads();
-        reduce_min<int64_t>(sdata, BLOCKSIZE, threadIdx.x);
+        reduce_op<min_op, int64_t>(sdata, BLOCKSIZE, min_op<int64_t>());
         if (threadIdx.x == 0) {
             buffer[gridDim.x + 1] = sdata[0];
         }
