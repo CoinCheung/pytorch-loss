@@ -5,6 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import  torch.cuda.amp as amp
 
 '''
     Proposed in this paper:  https://arxiv.org/abs/1911.10688
@@ -51,6 +52,7 @@ class PCSoftmaxCrossEntropyV1(nn.Module):
 class PCSoftmaxCrossEntropyFunction(torch.autograd.Function):
 
     @staticmethod
+    @amp.custom_fwd
     def forward(ctx, logits, label, lb_proportion, reduction, ignore_index):
         # prepare label
         label = label.clone().detach()
@@ -88,6 +90,7 @@ class PCSoftmaxCrossEntropyFunction(torch.autograd.Function):
         return loss
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         mask = ctx.mask
         W = ctx.W

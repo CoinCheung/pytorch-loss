@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import  torch.cuda.amp as amp
+import torch.cuda.amp as amp
 import soft_dice_cpp # should import torch before import this
 
 
@@ -212,10 +212,10 @@ if __name__ == '__main__':
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
     bs = 12
-    #  size = 32, 32
-    size = 229, 229
+    size = 32, 32
+    #  size = 229, 229
     #  for it in range(300000):
-    for it in range(300):
+    for it in range(500):
         inten = torch.randn(bs, 3, *size).cuda()
         lbs = torch.randint(0, 2, (bs, *size)).cuda()
         logits = net1(inten).squeeze(1)

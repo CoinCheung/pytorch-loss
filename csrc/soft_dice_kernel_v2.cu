@@ -46,52 +46,6 @@ __device__ __forceinline__ void reduce_op(
 }
 
 
-template<typename scalar_t>
-__global__ void SoftDiceForward(const int batchsize, const int n_blockxs_sample,
-                            scalar_t *numer,
-                            scalar_t *denor,
-                            scalar_t *losses,
-                            const float smooth) {
-    extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
-    scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
-    sdata = sdata + threadIdx.y * blockDim.x;
-
-    int tid = threadIdx.x;
-    int bid = threadIdx.y + blockIdx.x * blockDim.y;
-    int bstrd = gridDim.x * blockDim.y;
-
-    const scalar_t one(1.);
-    for (int i{bid}; i < batchsize; i += bstrd) {
-        scalar_t v_numer{0}, v_denor{0};
-        int t_start = i * n_blockxs_sample;
-        for (int j{tid}; j < n_blockxs_sample; j += blockDim.x) {
-            v_numer += numer[j + t_start];
-            v_denor += denor[j + t_start];
-        }
-
-        // reduce numer
-        sdata[tid] = v_numer;
-        __syncthreads();
-        soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
-                sdata, 
-                blockDim.x,
-                soft_dice_space::sum_op<scalar_t>());
-        v_numer = sdata[0];
-
-        // reduce denorm
-        sdata[tid] = v_denor;
-        __syncthreads();
-        soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
-                sdata, 
-                blockDim.x,
-                soft_dice_space::sum_op<scalar_t>());
-        v_denor = sdata[0];
-        if (tid == 0) {
-            losses[bid] = one - (v_numer + smooth) / (v_denor + smooth);
-        }
-    } 
-}
-
 
 // kernel function for forward and backward
 template<typename scalar_t>
@@ -158,6 +112,54 @@ __global__ void compute_numer_denor(const int batchsize,
 
 
 template<typename scalar_t>
+__global__ void SoftDiceForward(const int batchsize, const int n_blockxs_sample,
+                            scalar_t *numer,
+                            scalar_t *denor,
+                            scalar_t *losses,
+                            const float smooth) {
+    extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
+    scalar_t *sdata = reinterpret_cast<scalar_t*>(sdata_raw);
+    sdata = sdata + threadIdx.y * blockDim.x;
+
+    int tid = threadIdx.x;
+    int bid = threadIdx.y + blockIdx.x * blockDim.y;
+    int bstrd = gridDim.x * blockDim.y;
+
+    const scalar_t one(1.);
+    for (int i{bid}; i < batchsize; i += bstrd) {
+        scalar_t v_numer{0}, v_denor{0};
+        int t_start = i * n_blockxs_sample;
+        for (int j{tid}; j < n_blockxs_sample; j += blockDim.x) {
+            v_numer += numer[j + t_start];
+            v_denor += denor[j + t_start];
+        }
+
+        // reduce numer
+        sdata[tid] = v_numer;
+        __syncthreads();
+        soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
+                sdata, 
+                blockDim.x,
+                soft_dice_space::sum_op<scalar_t>());
+        v_numer = sdata[0];
+
+        // reduce denorm
+        sdata[tid] = v_denor;
+        __syncthreads();
+        soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
+                sdata, 
+                blockDim.x,
+                soft_dice_space::sum_op<scalar_t>());
+        v_denor = sdata[0];
+        if (tid == 0) {
+            losses[bid] = one - (v_numer + smooth) / (v_denor + smooth);
+        }
+    } 
+}
+
+
+
+template<typename scalar_t>
 __global__ void reduce_numer_denor(const int batchsize, const int n_blockxs_sample,
                             scalar_t *numer,
                             scalar_t *denor,
@@ -217,7 +219,7 @@ __global__ void SoftDiceBackward(const int batchsize, const int sample_size,
                              const float p) {
     int tid = threadIdx.x;
     int tstrd = blockDim.x * n_blockxs_sample;
-    int bid = blockIdx.x * blockDim.y + blockIdx.y;
+    int bid = blockIdx.x * blockDim.y + threadIdx.y;
     int bstrd = blockDim.y * gridDim.x;
 
     const scalar_t one(1.);
@@ -231,6 +233,7 @@ __global__ void SoftDiceBackward(const int batchsize, const int sample_size,
         scalar_t v_numer = numer[sample_idx * n_blockxs_sample];
         scalar_t v_denor = denor[sample_idx * n_blockxs_sample];
         scalar_t grad_val = grad[sample_idx];
+
         for (int j{local_tid}; j < sample_size; j += tstrd) {
             scalar_t prob = one / (one + exp(-logits[j + sample_start]));
             int64_t lb = labels[j + sample_start];
@@ -264,8 +267,9 @@ at::Tensor SoftDice_forward_cuda(const at::Tensor &logits,
     int blockx1 = 32;
     while (blockx1 < sample_size) blockx1 *= 2;
     blockx1 = std::max(32, std::min(BLOCKSIZE, blockx1 / 2));
-    int n_blockxs_sample = sample_size / blockx1;
+    int n_blockxs_sample = std::max(1, sample_size / blockx1);
     int blocky1 = std::max(1, BLOCKSIZE / blockx1);
+    if (blocky1 > batchsize) blocky1 = batchsize;
     int gridx1 = batchsize * n_blockxs_sample / blocky1;
     gridx1 = std::max(1, std::min(4096, gridx1));
     dim3 block1(blockx1, blocky1);
@@ -335,25 +339,18 @@ at::Tensor SoftDice_backward_cuda(const at::Tensor &grad,
     const int num_samples = logits.numel();
     const int sample_size = num_samples / batchsize;
 
-    // dim3 grid(std::min(
-    //     THCCeilDiv((int64_t)sample_size, (int64_t)BLOCKSIZE), (int64_t)4096
-    // ), batchsize);
-    // dim3 block(BLOCKSIZE);
-    // if (grad_logits.numel() == 0) {
-    //     THCudaCheck(cudaGetLastError());
-    //     return grad_logits;
-    // }
-
     // parallel settings for numer/denor
     int blockx1 = 32;
     while (blockx1 < sample_size) blockx1 *= 2;
     blockx1 = std::max(32, std::min(BLOCKSIZE, blockx1 / 2));
     int n_blockxs_sample = sample_size / blockx1;
     int blocky1 = std::max(1, BLOCKSIZE / blockx1);
+    if (blocky1 > batchsize) blocky1 = batchsize;
     int gridx1 = batchsize * n_blockxs_sample / blocky1;
     gridx1 = std::max(1, std::min(4096, gridx1));
     dim3 block1(blockx1, blocky1);
     dim3 grid1(gridx1);
+
     // parallel settings for reduce numer/denor
     int blockx2 = 32;
     while (blockx2 < n_blockxs_sample) blockx2 *= 2;
