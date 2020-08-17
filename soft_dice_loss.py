@@ -5,6 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import  torch.cuda.amp as amp
 import soft_dice_cpp # should import torch before import this
 
 
@@ -33,6 +34,7 @@ class SoftDiceLossV1(nn.Module):
         numer = (probs * labels).sum(dim=(1, 2))
         denor = (probs.pow(self.p) + labels).sum(dim=(1, 2))
         loss = 1. - (2 * numer + self.smooth) / (denor + self.smooth)
+
         if self.reduction == 'mean':
             loss = loss.mean()
         elif self.reduction == 'sum':
@@ -73,6 +75,7 @@ class SoftDiceLossV2Func(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
+    @amp.custom_fwd
     def forward(ctx, logits, labels, p, smooth):
         logits = logits.float()
 
@@ -85,6 +88,7 @@ class SoftDiceLossV2Func(torch.autograd.Function):
         return loss
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         '''
         compute gradient of soft-dice loss
@@ -136,6 +140,7 @@ class SoftDiceLossV3Func(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
+    @amp.custom_fwd
     def forward(ctx, logits, labels, p, smooth):
         logits = logits.float()
         loss = soft_dice_cpp.soft_dice_forward(logits, labels, p, smooth)
@@ -143,6 +148,7 @@ class SoftDiceLossV3Func(torch.autograd.Function):
         return loss
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         '''
         compute gradient of soft-dice loss
@@ -206,10 +212,12 @@ if __name__ == '__main__':
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
     bs = 12
+    #  size = 32, 32
+    size = 229, 229
     #  for it in range(300000):
-    for it in range(2):
-        inten = torch.randn(bs, 3, 224, 244).cuda()
-        lbs = torch.randint(0, 2, (bs, 224, 244)).cuda()
+    for it in range(300):
+        inten = torch.randn(bs, 3, *size).cuda()
+        lbs = torch.randint(0, 2, (bs, *size)).cuda()
         logits = net1(inten).squeeze(1)
         loss1 = criteria1(logits, lbs)
         optim1.zero_grad()

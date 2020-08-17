@@ -21,10 +21,10 @@ setup(
             ['csrc/swish_kernel.cu']),
         cpp_extension.CUDAExtension(
             'soft_dice_cpp',
-            ['csrc/soft_dice_kernel.cu']),
+            ['csrc/soft_dice_kernel_v2.cu']),
         cpp_extension.CUDAExtension(
             'lsr_cpp',
-            ['csrc/lsr_kernel_v2.cu']),
+            ['csrc/lsr_kernel.cu']),
         cpp_extension.CUDAExtension(
             'large_margin_cpp',
             ['csrc/large_margin_kernel.cu']),

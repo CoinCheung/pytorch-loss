@@ -5,6 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.cuda.amp as amp
 
 
 
@@ -56,6 +57,7 @@ class LabelSmoothSoftmaxCEV1(nn.Module):
 class LSRCrossEntropyFunctionV2(torch.autograd.Function):
 
     @staticmethod
+    @amp.custom_fwd
     def forward(ctx, logits, label, lb_smooth, lb_ignore):
         # prepare label
         num_classes = logits.size(1)
@@ -67,7 +69,7 @@ class LSRCrossEntropyFunctionV2(torch.autograd.Function):
         lb_one_hot = torch.empty_like(logits).fill_(
             lb_neg).scatter_(1, label.unsqueeze(1), lb_pos).detach()
 
-        ignore = ignore.nonzero()
+        ignore = ignore.nonzero(as_tuple=False)
         _, M = ignore.size()
         a, *b = ignore.chunk(M, dim=1)
         mask = [a, torch.arange(logits.size(1)), *b]
@@ -80,6 +82,7 @@ class LSRCrossEntropyFunctionV2(torch.autograd.Function):
         return loss
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         coeff, mask, logits, lb_one_hot = ctx.variables
 
@@ -115,6 +118,7 @@ class LSRCrossEntropyFunctionV3(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
+    @amp.custom_fwd
     def forward(ctx, logits, labels, lb_smooth, lb_ignore):
         losses = lsr_cpp.lsr_forward(logits, labels, lb_ignore, lb_smooth)
 
@@ -122,6 +126,7 @@ class LSRCrossEntropyFunctionV3(torch.autograd.Function):
         return losses
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         logits, labels, lb_ignore, lb_smooth = ctx.variables
 

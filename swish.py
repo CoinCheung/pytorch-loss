@@ -22,6 +22,7 @@ class SwishV1(nn.Module):
 class SwishFunction(torch.autograd.Function):
 
     @staticmethod
+    @amp.custom_fwd
     def forward(ctx, feat):
         sig = torch.sigmoid(feat)
         out = feat * torch.sigmoid(feat)
@@ -30,6 +31,7 @@ class SwishFunction(torch.autograd.Function):
         return out
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         grad = ctx.grad
         grad *= grad_output
@@ -51,11 +53,13 @@ import swish_cpp
 class SwishFunctionV3(torch.autograd.Function):
 
     @staticmethod
+    @amp.custom_fwd
     def forward(ctx, feat):
         ctx.feat = feat
         return swish_cpp.swish_forward(feat)
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         feat = ctx.feat
         return swish_cpp.swish_backward(grad_output, feat)
