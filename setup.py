@@ -1,5 +1,5 @@
 
-from setuptools import setup, Extension
+from setuptools import setup, Extension, find_packages
 from torch.utils import cpp_extension
 
 '''
@@ -35,5 +35,6 @@ setup(
             'one_hot_cpp',
             ['csrc/one_hot_kernel.cu']),
     ],
-    cmdclass={'build_ext': cpp_extension.BuildExtension}
+    cmdclass={'build_ext': cpp_extension.BuildExtension},
+    packages=find_packages()
 )
