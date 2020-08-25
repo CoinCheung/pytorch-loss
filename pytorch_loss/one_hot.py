@@ -54,6 +54,26 @@ def convert_to_one_hot_cu(x, minleng, smooth=0., ignore_idx=-1):
     return one_hot_cpp.label_one_hot(x, ignore_idx, smooth, minleng)
 
 
+
+class OnehotEncoder(nn.Module):
+
+    def __init__(
+            self,
+            n_classes,
+            lb_smooth=0.,
+            ignore_idx=-1,
+        ):
+        super(OnehotEncoder, self).__init__()
+        self.n_classes = n_classes
+        self.lb_smooth = lb_smooth
+        self.ignore_idx = ignore_idx
+
+    @ torch.no_grad()
+    def forward(self, label):
+        return convert_to_one_hot_cu(
+            label, self.n_classes, self.lb_smooth, self.ignore_idx).detach()
+
+
 if __name__ == "__main__":
     x = torch.randint(0, 3, (3, 4))
     print(x)
