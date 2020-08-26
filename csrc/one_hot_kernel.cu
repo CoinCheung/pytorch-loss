@@ -58,7 +58,7 @@ __device__ __forceinline__ void reduce_op(
 }
 
 
-__global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
+__global__ void find_max_min_block(int64_t *data, int64_t *buffer, int samplesize,
         int64_t ignore_index) {
     extern __shared__ __align__(sizeof(int64_t)) unsigned char sdata_raw[];
     int64_t *sdata = reinterpret_cast<int64_t*>(sdata_raw);
@@ -66,36 +66,12 @@ __global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
     const int sample_offset = gridDim.x * blockDim.x;
 
     // find max and min of each block
-    sdata[threadIdx.x] = -100000L;
-    __syncthreads();
-    int64_t min{100000};
+    int64_t min{100000L}, max{-100000L};
     for (int i{tid}; i < samplesize; i += sample_offset) {
         int64_t val = data[i];
         if (val == ignore_index) continue;
-        if (sdata[threadIdx.x] < val) {
-            sdata[threadIdx.x] = val;
-        }
+        if (max < val) max = val;
         if (min > val) min = val;
-    }
-
-    // find max
-    reduce_op<max_op, int64_t>(sdata, blockDim.x, max_op<int64_t>());
-    if (threadIdx.x == 0) {
-        buffer[blockIdx.x] = sdata[0];
-    }
-    if (blockIdx.x == 0) {
-        sdata[threadIdx.x] = -100000L;
-        __syncthreads();
-        for (int i{static_cast<int>(threadIdx.x)}; i < gridDim.x; i += blockDim.x) {
-            int64_t val = buffer[i];
-            if (sdata[threadIdx.x] < val) {
-                sdata[threadIdx.x] = val;
-            }
-        }
-        reduce_op<max_op, int64_t>(sdata, blockDim.x, max_op<int64_t>());
-        if (threadIdx.x == 0) {
-            buffer[gridDim.x] = sdata[0];
-        }
     }
 
     // find min
@@ -104,23 +80,88 @@ __global__ void find_max_min(int64_t *data, int64_t *buffer, int samplesize,
 
     reduce_op<min_op, int64_t>(sdata, blockDim.x, min_op<int64_t>());
     if (threadIdx.x == 0) {
+        buffer[gridDim.x + blockIdx.x] = sdata[0];
+    }
+
+    // find max
+    sdata[threadIdx.x] = max;
+    __syncthreads();
+
+    reduce_op<max_op, int64_t>(sdata, blockDim.x, max_op<int64_t>());
+    if (threadIdx.x == 0) {
         buffer[blockIdx.x] = sdata[0];
     }
-    if (blockIdx.x == 0) {
-        sdata[threadIdx.x] = 100000L;
-        __syncthreads();
-        for (int i{static_cast<int>(threadIdx.x)}; i < gridDim.x; i += blockDim.x) {
-            if (sdata[threadIdx.x] > buffer[i]) {
-                sdata[threadIdx.x] = buffer[i];
-            }
-        }
-        __syncthreads();
-        reduce_op<min_op, int64_t>(sdata, blockDim.x, min_op<int64_t>());
-        if (threadIdx.x == 0) {
-            buffer[gridDim.x + 1] = sdata[0];
-        }
+}
+
+
+__global__ void find_max_min_reduce(int64_t *buffer, int64_t buf_len) {
+    // This function is designed for only one block
+    extern __shared__ __align__(sizeof(int64_t)) unsigned char sdata_raw[];
+    int64_t *sdata = reinterpret_cast<int64_t*>(sdata_raw);
+    const int tid = blockIdx.x;
+
+    int64_t min{100000L}, max{-100000L};
+    for (int i{tid}; i < buf_len; i += blockDim.x) {
+        int64_t val = buffer[i];
+        if (val > max) max = val;
+        val = buffer[buf_len + i];
+        if (val < min) min = val;
+    }
+
+    // find min
+    sdata[threadIdx.x] = min;
+    __syncthreads();
+
+    reduce_op<min_op, int64_t>(sdata, blockDim.x, min_op<int64_t>());
+    if (threadIdx.x == 0) {
+        buffer[0] = sdata[0];
+    }
+
+    // find max
+    sdata[threadIdx.x] = max;
+    __syncthreads();
+
+    reduce_op<max_op, int64_t>(sdata, blockDim.x, max_op<int64_t>());
+    if (threadIdx.x == 0) {
+        buffer[buf_len] = sdata[0];
     }
 }
+
+
+// TODO: try use one block if samplesize less than 4k
+void find_max_min(const at::Tensor &labels,
+        int samplesize, int64_t ignore_index, int64_t *res) {
+    int block0x = 32;
+    while (block0x < samplesize) block0x *= 2;
+    block0x = std::max(std::min(block0x / 2, BLOCKSIZE), 32);
+    int grid0x = std::min(std::max(1, samplesize / block0x), 4096);
+    dim3 block0(block0x);
+    dim3 grid0(grid0x);
+    int shm_size = block0x * sizeof(int64_t);
+    auto buffer = torch::empty({grid0x + grid0x}, labels.options()); 
+    find_max_min_block<<<grid0, block0, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+            labels.contiguous().data_ptr<int64_t>(),
+            buffer.contiguous().data_ptr<int64_t>(),
+            samplesize, ignore_index);
+    int block1x = 32;
+    while (block1x < samplesize) block1x *= 2;
+    block1x = std::max(std::min(block1x, BLOCKSIZE), 32);
+    dim3 block1(block1x);
+    dim3 grid1(1);
+    shm_size = block1x * sizeof(int64_t);
+    find_max_min_reduce<<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+            buffer.contiguous().data_ptr<int64_t>(),
+            grid0x);
+
+    res[0] = buffer[0].item().toLong();
+    res[1] = buffer[grid0x].item().toLong();
+
+
+    // cout << "block0x: " << block0x << ", grid0x: " << grid0x << endl;
+
+}
+
+
 
 }
 
@@ -225,24 +266,16 @@ at::Tensor Label_one_hot_cuda(const at::Tensor &labels,
     const int m_size = datasize / (n_size * dimsize);
 
     // find max and min and check
-    int block0x = 32;
-    while (block0x < samplesize) block0x *= 2;
-    block0x = std::max(std::min(block0x / 2, BLOCKSIZE), 32);
-    int grid0x = std::min(std::max(1, samplesize / block0x), 4096);
-    dim3 block0(block0x);
-    dim3 grid0(grid0x);
-    int shm_size = block0x * sizeof(int64_t);
-    auto buffer = torch::empty({grid0x + 2}, labels.options()); // +1 is max, +2 is min
-    one_hot_space::find_max_min<<<grid0, block0, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            labels.contiguous().data_ptr<int64_t>(),
-            buffer.contiguous().data_ptr<int64_t>(),
-            samplesize, ignore_index);
+    vector<int64_t> maxmin{-1000000L, 1000000L}; // 0-max, 1-min
+    one_hot_space::find_max_min(
+            labels, samplesize, ignore_index, &maxmin[0]);
+    if (maxmin[0] > min_len || maxmin[1] < 0) {
+        cout << "max: " << maxmin[0] << ", min: " << maxmin[1]
+            << ", min_len: " << min_len << endl;
+    }
+    TORCH_CHECK(maxmin[0] < min_len, "label should be less than min_len\n");
+    TORCH_CHECK(maxmin[1] >= 0, "label should be more than 0\n");
 
-    int64_t max{buffer[grid0x].item().toLong()};
-    int64_t min{buffer[grid0x + 1].item().toLong()};
-    // TORCH_CHECK(max <= min_len && min >= 0, "label should be within 0 and min_len\n");
-    TORCH_CHECK(max <= min_len, "label should be less than min_len\n");
-    TORCH_CHECK(min >= 0, "label should be more than 0\n");
 
     // set values
     const float lb_pos{1.f - smooth};
