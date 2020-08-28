@@ -74,15 +74,6 @@ __global__ void find_max_min_block(int64_t *data, int64_t *buffer, int samplesiz
         if (min > val) min = val;
     }
 
-    // find min
-    sdata[threadIdx.x] = min;
-    __syncthreads();
-
-    reduce_op<min_op, int64_t>(sdata, blockDim.x, min_op<int64_t>());
-    if (threadIdx.x == 0) {
-        buffer[gridDim.x + blockIdx.x] = sdata[0];
-    }
-
     // find max
     sdata[threadIdx.x] = max;
     __syncthreads();
@@ -90,6 +81,15 @@ __global__ void find_max_min_block(int64_t *data, int64_t *buffer, int samplesiz
     reduce_op<max_op, int64_t>(sdata, blockDim.x, max_op<int64_t>());
     if (threadIdx.x == 0) {
         buffer[blockIdx.x] = sdata[0];
+    }
+
+    // find min
+    sdata[threadIdx.x] = min;
+    __syncthreads();
+
+    reduce_op<min_op, int64_t>(sdata, blockDim.x, min_op<int64_t>());
+    if (threadIdx.x == 0) {
+        buffer[gridDim.x + blockIdx.x] = sdata[0];
     }
 }
 
@@ -128,40 +128,60 @@ __global__ void find_max_min_reduce(int64_t *buffer, int64_t buf_len) {
 }
 
 
-// TODO: try use one block if samplesize less than 4k
 void find_max_min(const at::Tensor &labels,
         int samplesize, int64_t ignore_index, int64_t *res) {
-    int block0x = 32;
-    while (block0x < samplesize) block0x *= 2;
-    block0x = std::max(std::min(block0x / 2, BLOCKSIZE), 32);
-    int grid0x = std::min(std::max(1, samplesize / block0x), 4096);
-    dim3 block0(block0x);
-    dim3 grid0(grid0x);
-    int shm_size = block0x * sizeof(int64_t);
-    auto buffer = torch::empty({grid0x + grid0x}, labels.options()); 
-    find_max_min_block<<<grid0, block0, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            labels.contiguous().data_ptr<int64_t>(),
-            buffer.contiguous().data_ptr<int64_t>(),
-            samplesize, ignore_index);
-    int block1x = 32;
-    while (block1x < samplesize) block1x *= 2;
-    block1x = std::max(std::min(block1x, BLOCKSIZE), 32);
-    dim3 block1(block1x);
-    dim3 grid1(1);
-    shm_size = block1x * sizeof(int64_t);
-    find_max_min_reduce<<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            buffer.contiguous().data_ptr<int64_t>(),
-            grid0x);
+    if (samplesize < 4096) {
+        // if sample size less than 4k, use only one block to find 
+        int block0x = 32;
+        while (block0x < samplesize) block0x *= 2;
+        block0x = std::max(std::min(block0x, BLOCKSIZE), 32);
+        int grid0x = 1;
+        dim3 block0(block0x);
+        dim3 grid0(grid0x);
+        int shm_size = block0x * sizeof(int64_t);
+        auto buffer = torch::empty({grid0x + grid0x}, labels.options()); 
 
-    res[0] = buffer[0].item().toLong();
-    res[1] = buffer[grid0x].item().toLong();
+        find_max_min_block<<<grid0, block0, shm_size,
+            at::cuda::getCurrentCUDAStream()>>>(
+                labels.contiguous().data_ptr<int64_t>(),
+                buffer.contiguous().data_ptr<int64_t>(),
+                samplesize, ignore_index);
 
+        res[0] = buffer[0].item().toLong();
+        res[1] = buffer[grid0x].item().toLong();
+    } else {
+        // if sample size is larger than 4k, ues multi-blocks to find, and then 
+        // reduce the result of each block
+        int block0x = BLOCKSIZE;
+        int grid0x = std::min(std::max(1, samplesize / block0x), 2048);
+        dim3 block0(block0x);
+        dim3 grid0(grid0x);
+        int shm_size = block0x * sizeof(int64_t);
+        auto buffer = torch::empty({grid0x + grid0x}, labels.options()); 
 
-    // cout << "block0x: " << block0x << ", grid0x: " << grid0x << endl;
+        find_max_min_block<<<grid0, block0, shm_size,
+            at::cuda::getCurrentCUDAStream()>>>(
+                labels.contiguous().data_ptr<int64_t>(),
+                buffer.contiguous().data_ptr<int64_t>(),
+                samplesize, ignore_index);
+
+        int block1x = 32;
+        while (block1x < grid0x) block1x *= 2;
+        block1x = std::max(std::min(block1x, BLOCKSIZE), 32);
+        dim3 block1(block1x);
+        dim3 grid1(1);
+        shm_size = block1x * sizeof(int64_t);
+
+        find_max_min_reduce<<<grid1, block1, shm_size,
+            at::cuda::getCurrentCUDAStream()>>>(
+                buffer.contiguous().data_ptr<int64_t>(),
+                grid0x);
+
+        res[0] = buffer[0].item().toLong();
+        res[1] = buffer[grid0x].item().toLong();
+    }
 
 }
-
-
 
 }
 
