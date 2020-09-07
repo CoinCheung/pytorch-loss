@@ -34,7 +34,7 @@ class OhemLargeMarginLoss(nn.Module):
         self.score_thresh = score_thresh
         self.ignore_lb = ignore_index
         self.n_min = n_min
-        self.criteria = importLargeMarginSoftmaxV3(
+        self.criteria = LargeMarginSoftmaxV3(
                 ignore_index=ignore_index, reduction='mean')
 
     def forward(self, logits, labels):
