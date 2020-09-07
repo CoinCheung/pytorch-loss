@@ -1,6 +1,6 @@
 # pytorch-loss
 
-My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, triplet-loss, giou-loss, affinity-loss, pc_softmax_cross_entropy, large-margin-softmax(bmvc2019), and dice-loss(both generalized soft dice loss and batch soft dice loss). Maybe this is useful in my future work.
+My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, triplet-loss, giou-loss, affinity-loss, pc_softmax_cross_entropy, ohem-loss(softmax based on line hard mining loss), large-margin-softmax(bmvc2019), and dice-loss(both generalized soft dice loss and batch soft dice loss). Maybe this is useful in my future work.
 
 
 Also tried to implement swish, hard-swish(hswish) and mish activation functions.
@@ -9,10 +9,33 @@ Additionally, one-hot function is added.
 
 Newly add an "Exponential Moving Average(EMA)" operator.
 
-Some operators are implemented with pytorch cuda extension, if you want to try them, please make sure you compile it first: 
+Some operators are implemented with pytorch cuda extension, so you need to compile it first: 
 ```
     $ python setup.py install
 ```
+
+After installing, now you can pick up what you need and use the losses or ops like one of thes: 
+```python
+from pytorch_loss import SwishV1, SwishV2, SwishV3
+from pytorch_loss import HSwishV1, HSwishV2, HSwishV3
+from pytorch_loss import MishV1, MishV2, MishV3
+from pytorch_loss import convert_to_one_hot, convert_to_one_hot_cu, OnehotEncoder
+from pytorch_loss import EMA
+
+from pytorch_loss import TripletLoss
+from pytorch_loss import SoftDiceLossV1, SoftDiceLossV2, SoftDiceLossV3
+from pytorch_loss import PCSoftmaxCrossEntropyV1, PCSoftmaxCrossEntropyV2
+from pytorch_loss import LargeMarginSoftmaxV1, LargeMarginSoftmaxV2, LargeMarginSoftmaxV3
+from pytorch_loss import LabelSmoothSoftmaxCEV1, LabelSmoothSoftmaxCEV2, LabelSmoothSoftmaxCEV3
+from pytorch_loss import generalized_iou_loss
+from pytorch_loss import FocalLossV1, FocalLossV2, FocalLossV3
+from pytorch_loss import Dual_Focal_loss
+from pytorch_loss import GeneralizedSoftDiceLoss, BatchSoftDiceLoss
+from pytorch_loss import AMSoftmax
+from pytorch_loss import AffinityFieldLoss
+from pytorch_loss import OhemCELoss, OhemLargeMarginLoss
+```
+Note that some losses or ops have 3 versions, like `LabelSmoothSoftmaxCEV1`, `LabelSmoothSoftmaxCEV2`, `LabelSmoothSoftmaxCEV3`, here `V1` means the implementation with pure pytorch ops and use `torch.autograd` for backward computation, `V2` means implementation with pure pytorch ops but use self-derived formula for backward computation, and `V3` means implementation with cuda extension. Generally speaking, the `V3` ops are faster and more memory efficient, since I have tried to squeeze everything in one cuda kernel function, which in most cases brings less overhead than a combination of pytorch ops.
 
 
 For those who happen to find this repo, if you see errors in my code, feel free to open an issue to correct me.

@@ -16,3 +16,4 @@ from .dual_focal_loss import Dual_Focal_loss
 from .dice_loss import GeneralizedSoftDiceLoss, BatchSoftDiceLoss
 from .amsoftmax import AMSoftmax
 from .affinity_loss import AffinityFieldLoss
+from .ohem_loss import OhemCELoss, OhemLargeMarginLoss
