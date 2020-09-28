@@ -5,9 +5,11 @@ My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, tripl
 
 Also tried to implement swish, hard-swish(hswish) and mish activation functions.
 
-Additionally, one-hot function is added.
+Additionally, cuda based one-hot function is added (support label smooth).
 
 Newly add an "Exponential Moving Average(EMA)" operator.
+
+Add convolution ops, such as coord-conv2d, and dynamic-conv2d(dy-conv2d).
 
 Some operators are implemented with pytorch cuda extension, so you need to compile it first: 
 ```
@@ -34,6 +36,8 @@ from pytorch_loss import GeneralizedSoftDiceLoss, BatchSoftDiceLoss
 from pytorch_loss import AMSoftmax
 from pytorch_loss import AffinityFieldLoss
 from pytorch_loss import OhemCELoss, OhemLargeMarginLoss
+
+from pytorch_loss import CoordConv2d, DY_Conv2d
 ```
 Note that some losses or ops have 3 versions, like `LabelSmoothSoftmaxCEV1`, `LabelSmoothSoftmaxCEV2`, `LabelSmoothSoftmaxCEV3`, here `V1` means the implementation with pure pytorch ops and use `torch.autograd` for backward computation, `V2` means implementation with pure pytorch ops but use self-derived formula for backward computation, and `V3` means implementation with cuda extension. Generally speaking, the `V3` ops are faster and more memory efficient, since I have tried to squeeze everything in one cuda kernel function, which in most cases brings less overhead than a combination of pytorch ops.
 
