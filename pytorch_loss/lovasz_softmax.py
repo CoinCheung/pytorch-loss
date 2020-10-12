@@ -42,9 +42,12 @@ class LovaszSoftmax(nn.Module):
 
         # lovasz extension grad
         with torch.no_grad():
-            lb_one_hot_sort = lb_one_hot[
-                torch.arange(c).unsqueeze(1).repeat(1, n_samples), errs_order
-                ].detach()
+            #  lb_one_hot_sort = lb_one_hot[
+            #      torch.arange(c).unsqueeze(1).repeat(1, n_samples), errs_order
+            #      ].detach()
+            lb_one_hot_sort = torch.cat([
+                lb_one_hot[i, ord].unsqueeze(0)
+                for i, ord in enumerate(errs_order)], dim=0)
             n_pos = lb_one_hot_sort.sum(dim=1, keepdim=True)
             inter = n_pos - lb_one_hot_sort.cumsum(dim=1)
             union = n_pos + (1. - lb_one_hot_sort).cumsum(dim=1)
