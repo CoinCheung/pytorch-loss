@@ -1,16 +1,67 @@
 
+#include <cuda.h>
 #include <torch/types.h>
 #include <cuda_runtime.h>
 #include <c10/util/Half.h>
 
+namespace math_ops {
 
+// exp func
 template<typename scalar_t>
+__forceinline__ __device__
 scalar_t Exp(scalar_t x) {
     return exp(x);
 }
 
 template<>
+__forceinline__ __device__
 c10::Half Exp(c10::Half x) {
-    return exp(x);
+    // return expf(static_cast<float>(x));
+    return hexp(x);
+}
+
+//
+// log func
+template<typename scalar_t>
+__forceinline__ __device__
+scalar_t Log(scalar_t x) {
+    return log(x);
+}
+
+template<>
+__forceinline__ __device__
+c10::Half Log(c10::Half x) {
+    // return logf(static_cast<float>(x));
+    return hlog(x);
+}
+
+// 
+// log1p
+template<typename scalar_t>
+__forceinline__ __device__
+scalar_t Log1p(scalar_t x) {
+    return log1p(x);
+}
+
+template<>
+__forceinline__ __device__
+c10::Half Log1p(c10::Half x) {
+    return log1p(static_cast<float>(x));
+}
+
+// 
+// pow
+template<typename scalar_t>
+__forceinline__ __device__
+scalar_t Pow(scalar_t x, scalar_t y) {
+    return pow(x, y);
+}
+
+template<>
+__forceinline__ __device__
+c10::Half Pow(c10::Half x, c10::Half y) {
+    return pow(static_cast<float>(x), static_cast<float>(y));
+}
+
 }
 

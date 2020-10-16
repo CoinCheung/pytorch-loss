@@ -12,7 +12,7 @@ setup(
     ext_modules=[
         cpp_extension.CUDAExtension(
             'focal_cpp',
-            ['csrc/focal.cpp', 'csrc/focal_kernel.cu']),
+            ['csrc/focal_kernel.cu', ]),
         cpp_extension.CUDAExtension(
             'mish_cpp',
             ['csrc/mish_kernel.cu']),

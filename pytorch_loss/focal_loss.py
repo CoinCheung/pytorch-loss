@@ -200,7 +200,7 @@ if __name__ == '__main__':
     net2 = Model()
     net2.load_state_dict(net1.state_dict())
 
-    criteria1 = FocalLossV1()
+    criteria1 = FocalLossV2()
     criteria2 = FocalLossV3()
     net1.cuda()
     net2.cuda()
