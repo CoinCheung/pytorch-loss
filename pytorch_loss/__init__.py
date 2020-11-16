@@ -1,6 +1,7 @@
 
 from .swish import SwishV1, SwishV2, SwishV3
 from .hswish import HSwishV1, HSwishV2, HSwishV3
+from .frelu import FReLU
 from .mish import MishV1, MishV2, MishV3
 from .one_hot import convert_to_one_hot, convert_to_one_hot_cu, OnehotEncoder
 from .ema import EMA
