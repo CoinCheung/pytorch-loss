@@ -21,7 +21,7 @@ class OhemCELoss(nn.Module):
 
     def forward(self, logits, labels):
         n_min = labels.numel() // 16 if self.n_min is None else self.n_min
-        labels = ohem_cpp.score_ohem_label(logits, labels,
+        labels = ohem_cpp.score_ohem_label(logits.float(), labels,
                 self.ignore_lb, self.score_thresh, n_min).detach()
         loss = self.criteria(logits, labels)
         return loss
@@ -39,7 +39,7 @@ class OhemLargeMarginLoss(nn.Module):
 
     def forward(self, logits, labels):
         n_min = labels.numel() // 16 if self.n_min is None else self.n_min
-        labels = ohem_cpp.score_ohem_label(logits, labels,
+        labels = ohem_cpp.score_ohem_label(logits.float(), labels,
                 self.ignore_lb, self.score_thresh, n_min).detach()
         loss = self.criteria(logits, labels)
         return loss
