@@ -20,3 +20,4 @@ from .affinity_loss import AffinityFieldLoss
 from .ohem_loss import OhemCELoss, OhemLargeMarginLoss
 from .conv_ops import CoordConv2d, DY_Conv2d
 from .lovasz_softmax import LovaszSoftmax
+from .taylor_softmax import TaylorSoftmax, TaylorCrossEntropyLoss

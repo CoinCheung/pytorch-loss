@@ -37,6 +37,9 @@ from pytorch_loss import AMSoftmax
 from pytorch_loss import AffinityFieldLoss
 from pytorch_loss import OhemCELoss, OhemLargeMarginLoss
 from pytorch_loss import LovaszSoftmax
+from pytorch_loss import TaylorCrossEntropyLoss
+
+from pytorch_loss import TaylorSoftmax
 
 from pytorch_loss import CoordConv2d, DY_Conv2d
 ```
