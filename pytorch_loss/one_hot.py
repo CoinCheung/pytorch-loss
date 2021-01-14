@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 
 
+@torch.no_grad()
 def convert_to_one_hot(x, minleng, ignore_idx=-1):
     '''
     encode input x into one hot
@@ -26,15 +27,14 @@ def convert_to_one_hot(x, minleng, ignore_idx=-1):
         out = torch.zeros(size, device=device).scatter_(1, x.unsqueeze(1), 1)
     else:
         # overcome ignore index
-        with torch.no_grad():
-            x = x.clone().detach()
-            ignore = x == ignore_idx
-            x[ignore] = 0
-            out = torch.zeros(size, device=device).scatter_(1, x.unsqueeze(1), 1)
-            ignore = ignore.nonzero(as_tuple=False)
-            _, M = ignore.size()
-            a, *b = ignore.chunk(M, dim=1)
-            out[[a, torch.arange(minleng), *b]] = 0
+        x = x.clone().detach()
+        ignore = x == ignore_idx
+        x[ignore] = 0
+        out = torch.zeros(size, device=device).scatter_(1, x.unsqueeze(1), 1)
+        ignore = ignore.nonzero(as_tuple=False)
+        _, M = ignore.size()
+        a, *b = ignore.chunk(M, dim=1)
+        out[[a, torch.arange(minleng), *b]] = 0
     return out
 
 

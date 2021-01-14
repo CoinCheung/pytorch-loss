@@ -16,7 +16,7 @@ from .focal_loss import FocalLossV1, FocalLossV2, FocalLossV3
 from .dual_focal_loss import Dual_Focal_loss
 from .dice_loss import GeneralizedSoftDiceLoss, BatchSoftDiceLoss
 from .amsoftmax import AMSoftmax
-from .affinity_loss import AffinityFieldLoss
+from .affinity_loss import AffinityFieldLoss, AffinityLoss
 from .ohem_loss import OhemCELoss, OhemLargeMarginLoss
 from .conv_ops import CoordConv2d, DY_Conv2d
 from .lovasz_softmax import LovaszSoftmax

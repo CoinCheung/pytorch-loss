@@ -4,6 +4,43 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+'''
+modified from the method proposed in this paper: [Context Prior for Scene Segmentation](https://arxiv.org/abs/2004.01547)
+
+The original paper uses global pairwise affinity to compute loss, while here we simply uses pair affinity within kxk local region. Besides, the so-called global term is removed.
+'''
+
+
+
+from .one_hot import convert_to_one_hot
+class AffinityLoss(nn.Module):
+
+    def __init__(self, kernel_size=3, ignore_index=-100):
+        super(AffinityLoss, self).__init__()
+        self.kernel_size = kernel_size
+        self.ignore_index = ignore_index
+        self.unfold = nn.Unfold(kernel_size=kernel_size)
+        self.bce = nn.BCEWithLogitsLoss(reduction='mean')
+
+    def forward(self, logits, labels):
+        '''
+        usage similar to nn.CrossEntropyLoss:
+            >>> criteria = AffinityLoss(kernel_size=3, ignore_index=255)
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw
+            >>> loss = criteria(logits, lbs)
+        '''
+        n, c, h, w = logits.size()
+        context_size = self.kernel_size * self.kernel_size
+        lb_one_hot = convert_to_one_hot(labels, c, self.ignore_index).detach()
+        logits_unfold = self.unfold(logits).view(n, c, context_size, -1)
+        lbs_unfold = self.unfold(lb_one_hot).view(n, c, context_size, -1)
+        aff_map = torch.einsum('ncal,ncbl->nabl', logits_unfold, logits_unfold)
+        lb_map = torch.einsum('ncal,ncbl->nabl', lbs_unfold, lbs_unfold)
+        loss = self.bce(aff_map, lb_map)
+        return loss
+
+
 
 class AffinityFieldLoss(nn.Module):
     '''
@@ -59,15 +96,18 @@ class AffinityFieldLoss(nn.Module):
 
 
 if __name__ == '__main__':
-    criteria = AffinityFieldLoss(kl_margin=3.)
-    criteria.cuda()
-    logits = torch.randn(4, 19, 768, 768).cuda()
-    logits = torch.tensor(logits, requires_grad=True)
-    scores = torch.softmax(logits, dim=1)
-    labels = torch.randint(0, 19, (4, 768, 768)).cuda()
+    #  criteria = AffinityFieldLoss(kl_margin=3.)
+    criteria = AffinityLoss(kernel_size=3, ignore_index=255)
+    #  criteria.cuda()
+
+    logits = torch.randn(8, 19, 768, 768).cuda().half()
+    labels = torch.randint(0, 19, (8, 768, 768)).cuda()
     labels[0, 30:35, 40:45] = 255
     labels[1, 0:5, 40:45] = 255
 
-    loss = criteria(scores, labels)
-    print(loss)
-    loss.backward()
+    loss = criteria(logits, labels)
+
+    #  scores = torch.softmax(logits, dim=1)
+    #  loss = criteria(scores, labels)
+    #  print(loss)
+    #  loss.backward()
