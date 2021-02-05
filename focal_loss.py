@@ -25,6 +25,11 @@ class FocalLossV1(nn.Module):
         args:
             logits: tensor of shape (N, ...)
             label: tensor of shape(N, ...)
+        Usage is like this:
+            >>> criteria = FocalLossV1()
+            >>> logits = torch.randn(8, 19, 384, 384)# nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nchw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
 
         # compute loss
@@ -51,7 +56,7 @@ class FocalSigmoidLossFuncV2(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, label, alpha, gamma):
         logits = logits.float()
         coeff = torch.empty_like(logits).fill_(1 - alpha)
@@ -94,6 +99,11 @@ class FocalSigmoidLossFuncV2(torch.autograd.Function):
 class FocalLossV2(nn.Module):
     '''
     This use better formula to compute the gradient, which has better numeric stability
+    Usage is like this:
+        >>> criteria = FocalLossV2()
+        >>> logits = torch.randn(8, 19, 384, 384)# nchw, float/half
+        >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nchw, int64_t
+        >>> loss = criteria(logits, lbs)
     '''
     def __init__(self,
                  alpha=0.25,
@@ -121,7 +131,7 @@ class FocalSigmoidLossFuncV3(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, alpha, gamma):
         logits = logits.float()
         loss = focal_cpp.focalloss_forward(logits, labels, gamma, alpha)
@@ -142,6 +152,11 @@ class FocalSigmoidLossFuncV3(torch.autograd.Function):
 class FocalLossV3(nn.Module):
     '''
     This use better formula to compute the gradient, which has better numeric stability
+    Usage is like this:
+        >>> criteria = FocalLossV3()
+        >>> logits = torch.randn(8, 19, 384, 384)# nchw, float/half
+        >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nchw, int64_t
+        >>> loss = criteria(logits, lbs)
     '''
     def __init__(self,
                  alpha=0.25,

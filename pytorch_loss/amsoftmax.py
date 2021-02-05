@@ -7,6 +7,7 @@ import torch.nn as nn
 
 
 class AMSoftmax(nn.Module):
+
     def __init__(self,
                  in_feats,
                  n_classes=10,

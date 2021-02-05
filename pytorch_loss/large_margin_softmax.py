@@ -93,7 +93,7 @@ class LargeMarginSoftmaxV2(nn.Module):
 class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, lam=0.3):
         num_classes = logits.size(1)
         coeff = 1. / (num_classes - 1.)
@@ -171,7 +171,7 @@ class LargeMarginSoftmaxFuncV3(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, lam=0.3, ignore_index=255):
         losses = large_margin_cpp.l_margin_forward(logits, labels, lam, ignore_index)
 

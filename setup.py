@@ -34,6 +34,9 @@ setup(
         cpp_extension.CUDAExtension(
             'one_hot_cpp',
             ['csrc/one_hot_kernel.cu']),
+        cpp_extension.CUDAExtension(
+            'lovasz_softmax_cpp',
+            ['csrc/lovasz_softmax.cu']),
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension},
     packages=find_packages()

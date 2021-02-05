@@ -36,7 +36,7 @@ from pytorch_loss import GeneralizedSoftDiceLoss, BatchSoftDiceLoss
 from pytorch_loss import AMSoftmax
 from pytorch_loss import AffinityFieldLoss, AffinityLoss
 from pytorch_loss import OhemCELoss, OhemLargeMarginLoss
-from pytorch_loss import LovaszSoftmax
+from pytorch_loss import LovaszSoftmaxV1, LovaszSoftmaxV3
 from pytorch_loss import TaylorCrossEntropyLoss
 
 from pytorch_loss import TaylorSoftmax

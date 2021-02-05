@@ -277,15 +277,18 @@ if __name__ == '__main__':
 
         #  print('net2.weight: ', net2.out.weight[0, 0, :, 0])
         #  net2.load_state_dict(net1.state_dict())
-        with torch.no_grad():
-            if (it+1) % 50 == 0:
-            #  if True:
-                #  print(loss1.item())
-                #  print(loss2.item())
-                #  break
-                print('iter: {}, ================='.format(it+1))
-                print('out.weight: ', torch.mean(torch.abs(net1.out.weight - net2.out.weight)).item())
-                print('conv1.weight: ', torch.mean(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
-                #  print(net1.out.weight.mean().item())
-                #  print(net2.out.weight.mean().item())
-                print('\nloss: ', loss1.item() - loss2.item())
+
+        print(grads)
+
+        #  with torch.no_grad():
+        #      if (it+1) % 50 == 0:
+        #      #  if True:
+        #          #  print(loss1.item())
+        #          #  print(loss2.item())
+        #          #  break
+        #          print('iter: {}, ================='.format(it+1))
+        #          print('out.weight: ', torch.mean(torch.abs(net1.out.weight - net2.out.weight)).item())
+        #          print('conv1.weight: ', torch.mean(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
+        #          #  print(net1.out.weight.mean().item())
+        #          #  print(net2.out.weight.mean().item())
+        #          print('\nloss: ', loss1.item() - loss2.item())

@@ -11,19 +11,22 @@ import torch.cuda.amp as amp
 
 ##
 # version 1: use torch.autograd
-class LovaszSoftmax(nn.Module):
+class LovaszSoftmaxV1(nn.Module):
     '''
-    This is the autograd version
+    This is the autograd version, used in the multi-category classification case
     '''
     def __init__(self, reduction='mean', ignore_index=-100):
-        super(LovaszSoftmax, self).__init__()
+        super(LovaszSoftmaxV1, self).__init__()
         self.reduction = reduction
         self.lb_ignore = ignore_index
 
     def forward(self, logits, label):
         '''
-        args: logits: tensor of shape (N, C, H, W)
-        args: label: tensor of shape(N, H, W)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LovaszSoftmaxV1()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         # overcome ignored label
         n, c, h, w = logits.size()
@@ -32,6 +35,7 @@ class LovaszSoftmax(nn.Module):
 
         idx = label.ne(self.lb_ignore).nonzero(as_tuple=False).squeeze()
         probs = logits.softmax(dim=0)[:, idx]
+
         label = label[idx]
         lb_one_hot = torch.zeros_like(probs).scatter_(
                 0, label.unsqueeze(0), 1).detach()
@@ -56,6 +60,54 @@ class LovaszSoftmax(nn.Module):
                 jacc[:, 1:] = jacc[:, 1:] - jacc[:, :-1]
 
         losses = torch.einsum('ab,ab->a', errs_sort, jacc)
+
+        if self.reduction == 'sum':
+            losses = losses.sum()
+        elif self.reduction == 'mean':
+            losses = losses.mean()
+        return losses
+
+
+
+##
+# version 3: use cuda
+import lovasz_softmax_cpp
+class LovaszSoftmaxFunctionV3(torch.autograd.Function):
+
+    @staticmethod
+    @amp.custom_fwd(cast_inputs=torch.float32)
+    def forward(ctx, logits, labels, ignore_index):
+        losses, jacc = lovasz_softmax_cpp.lovasz_softmax_forward(logits,
+                labels, ignore_index)
+        ctx.vars = logits, labels, jacc, ignore_index
+        return losses
+
+    @staticmethod
+    @amp.custom_bwd
+    def backward(ctx, grad_output):
+        logits, labels, jacc, ignore_index = ctx.vars
+        grad = lovasz_softmax_cpp.lovasz_softmax_backward(grad_output, logits, labels, jacc, ignore_index)
+        return grad, None, None
+
+
+class LovaszSoftmaxV3(nn.Module):
+    '''
+    '''
+    def __init__(self, reduction='mean', ignore_index=-100):
+        super(LovaszSoftmaxV3, self).__init__()
+        self.reduction = reduction
+        self.lb_ignore = ignore_index
+
+    def forward(self, logits, label):
+        '''
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LovaszSoftmaxV3()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
+        '''
+        # overcome ignored label
+        losses = LovaszSoftmaxFunctionV3.apply(logits, label, self.lb_ignore)
         if self.reduction == 'sum':
             losses = losses.sum()
         elif self.reduction == 'mean':
@@ -65,9 +117,35 @@ class LovaszSoftmax(nn.Module):
 
 
 
-
-
 if __name__ == '__main__':
+    torch.manual_seed(123)
+    torch.cuda.manual_seed(123)
+    #  crit1 = LovaszSoftmaxV1(reduction='none', ignore_index=255)
+    #  crit2 = lovasz_softmax_cpp.lovasz_softmax_forward
+    #
+    #  bs, c, h, w = 2, 19, 1000, 1000
+    #  #  bs, c, h, w = 2, 18, 1240, 1240
+    #  inten = torch.randn(bs, c, h, w).cuda()
+    #  #  inten2 = inten1.clone()
+    #  label = torch.randint(0, c, (bs, h, w)).cuda()
+    #  #  label[0, :, :] = 255
+    #  #  label[1, 13:20, 6] = 255
+    #
+    #  loss1, errs1, jacc1 = crit1(inten, label)
+    #  loss2, jacc2 = crit2(inten, label, 255)
+    #  print(loss1.size())
+    #  print(loss2.size())
+    #  print((loss1.view(-1) - loss2.view(-1)).abs().sum())
+    #  print((jacc1.view(-1) - jacc2.view(-1)).abs().sum())
+    #  print(loss1)
+    #  print(loss2)
+
+
+
+    #  print((jac1 - jac2).sum())
+    #  print(jac1[1, :8])
+    #  print(jac2[1, :8])
+
     import torchvision
     import torch
     import numpy as np
@@ -107,8 +185,8 @@ if __name__ == '__main__':
     net2 = Model()
     net2.load_state_dict(net1.state_dict())
     red = 'mean'
-    criteria1 = LabelSmoothSoftmaxCEV2(lb_smooth=0.1, ignore_index=255, reduction=red)
-    criteria2 = LabelSmoothSoftmaxCEV1(lb_smooth=0.1, ignore_index=255, reduction=red)
+    criteria1 = LovaszSoftmaxV1(reduction='sum', ignore_index=255)
+    criteria2 = LovaszSoftmaxV3(reduction='sum', ignore_index=255)
     net1.cuda()
     net2.cuda()
     net1.train()
@@ -119,26 +197,35 @@ if __name__ == '__main__':
     optim1 = torch.optim.SGD(net1.parameters(), lr=1e-2)
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
-    bs = 64
-    for it in range(300):
-        inten = torch.randn(bs, 3, 224, 224).cuda()
-        lbs = torch.randint(0, 19, (bs, 224, 224)).cuda()
-        lbs[1, 1, 1] = 255
-        lbs[30, 3, 2:200] = 255
-        lbs[18, 4:7, 8:200] = 255
-        logits = net1(inten)
-        loss1 = criteria1(logits, lbs)
+    bs, c, h, w = 2, 19, 1000, 1000
+    for it in range(10000):
+        inten = torch.randn(bs, 3, h, w).cuda()
+        lbs = torch.randint(0, c, (bs, h, w)).cuda()
+        #  lbs[1, 1, 1] = 255
+        #  lbs[30, 3, 2:200] = 255
+        #  lbs[18, 4:7, 8:200] = 255
+        logits1 = net1(inten)
+        logits1.retain_grad()
+        loss1 = criteria1(logits1, lbs)
         optim1.zero_grad()
         loss1.backward()
         optim1.step()
         #  print(net1.fc.weight[:, :5])
-        logits = net2(inten)
-        loss2 = criteria2(logits, lbs)
+        logits2 = net2(inten)
+        #  logits2 = logits1.clone()
+        loss2 = criteria2(logits2, lbs)
         optim2.zero_grad()
         loss2.backward()
         optim2.step()
         #  net1.load_state_dict(net2.state_dict())
         #  print(net2.fc.weight[:, :5])
+        #  g1 = logits1.grad
+        #  g2 = grads['grad_cuda']
+        #  print(g2.size())
+        #  print(g1[0, 0, :2, :4])
+        #  print(g2[0, 0, :2, :4])
+        #  print((g1 - g2).abs().sum())
+        #  print(g2[0, :4])
         with torch.no_grad():
             if (it+1) % 50 == 0:
                 print('iter: {}, ================='.format(it+1))
