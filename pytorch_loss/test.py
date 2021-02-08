@@ -47,8 +47,8 @@ net1 = Model(c)
 #  net2.load_state_dict(net1.state_dict())
 red = 'mean'
 #  criteria1 = LovaszSoftmaxV1(reduction='sum', ignore_index=255)
-#  criteria1 = LovaszSoftmaxV3(reduction='sum', ignore_index=255)
-criteria1 = LabelSmoothSoftmaxCEV3(reduction='sum', ignore_index=255)
+criteria1 = LovaszSoftmaxV3(reduction='sum', ignore_index=255)
+#  criteria1 = LabelSmoothSoftmaxCEV3(reduction='sum', ignore_index=255)
 
 net1.cuda()
 #  net2.cuda()
@@ -61,7 +61,7 @@ criteria1.cuda()
 optim1 = torch.optim.SGD(net1.parameters(), lr=1e-2)
 #  optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
-bs, h, w = 2, 400, 400
+bs, h, w = 2, 1000, 1000
 for it in range(1000):
     inten = torch.randn(bs, 3, h, w).cuda()#.half()
     lbs = torch.randint(0, c, (bs, h, w)).cuda()
