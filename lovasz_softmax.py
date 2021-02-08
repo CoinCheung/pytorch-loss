@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.cuda.amp as amp
 
-
+grads = {}
 
 ##
 # version 1: use torch.autograd
@@ -65,7 +65,7 @@ class LovaszSoftmaxV1(nn.Module):
             losses = losses.sum()
         elif self.reduction == 'mean':
             losses = losses.mean()
-        return losses
+        return losses, errs
 
 
 
@@ -80,6 +80,7 @@ class LovaszSoftmaxFunctionV3(torch.autograd.Function):
         losses, jacc = lovasz_softmax_cpp.lovasz_softmax_forward(logits,
                 labels, ignore_index)
         ctx.vars = logits, labels, jacc, ignore_index
+        grads['one_hot'] = jacc
         return losses
 
     @staticmethod
@@ -155,8 +156,10 @@ if __name__ == '__main__':
     np.random.seed(15)
     torch.backends.cudnn.deterministic = True
 
+    scaler = amp.GradScaler()
+
     class Model(nn.Module):
-        def __init__(self):
+        def __init__(self, n_classes):
             super(Model, self).__init__()
             net = torchvision.models.resnet18(pretrained=False)
             self.conv1 = net.conv1
@@ -167,7 +170,7 @@ if __name__ == '__main__':
             self.layer2 = net.layer2
             self.layer3 = net.layer3
             self.layer4 = net.layer4
-            self.fc = nn.Conv2d(512, 19, 3, 1, 1)
+            self.fc = nn.Conv2d(512, n_classes, 3, 1, 1)
         def forward(self, x):
             feat = self.conv1(x)
             feat = self.bn1(feat)
@@ -181,56 +184,60 @@ if __name__ == '__main__':
             out = F.interpolate(feat, x.size()[2:], mode='bilinear', align_corners=True)
             return out
 
-    net1 = Model()
-    net2 = Model()
+    c = 227
+    net1 = Model(c)
+    net2 = Model(c)
     net2.load_state_dict(net1.state_dict())
-    red = 'mean'
+    red = 'none'
     criteria1 = LovaszSoftmaxV1(reduction='sum', ignore_index=255)
     criteria2 = LovaszSoftmaxV3(reduction='sum', ignore_index=255)
     net1.cuda()
     net2.cuda()
     net1.train()
     net2.train()
+    #  net1 = net1.half()
+    #  net2 = net2.half()
     criteria1.cuda()
     criteria2.cuda()
 
     optim1 = torch.optim.SGD(net1.parameters(), lr=1e-2)
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
+    weight = torch.randn(c).softmax(dim=0).cuda().detach()
 
-    bs, c, h, w = 2, 19, 1000, 1000
-    for it in range(10000):
-        inten = torch.randn(bs, 3, h, w).cuda()
+    bs, h, w = 2, 400, 400
+    use_fp16 = False
+    for it in range(1000):
+        inten = torch.randn(bs, 3, h, w).cuda()#.half()
         lbs = torch.randint(0, c, (bs, h, w)).cuda()
+        #  lbs2 = lbs.clone()
         #  lbs[1, 1, 1] = 255
-        #  lbs[30, 3, 2:200] = 255
-        #  lbs[18, 4:7, 8:200] = 255
-        logits1 = net1(inten)
-        logits1.retain_grad()
-        loss1 = criteria1(logits1, lbs)
+        #  lbs[0, 3:100, 2:100] = 255
+        #  lbs[1, 4:70, 28:200] = 255
         optim1.zero_grad()
+        logits1 = net1(inten)
+        #  logits1.retain_grad()
+        loss1, one_hot = criteria1(logits1, lbs)
+        loss1 = loss1.mul(weight).sum()
         loss1.backward()
         optim1.step()
-        #  print(net1.fc.weight[:, :5])
-        logits2 = net2(inten)
-        #  logits2 = logits1.clone()
-        loss2 = criteria2(logits2, lbs)
+
         optim2.zero_grad()
+        logits2 = net2(inten)
+        loss2 = criteria2(logits2, lbs).mul(weight).sum()
         loss2.backward()
         optim2.step()
-        #  net1.load_state_dict(net2.state_dict())
-        #  print(net2.fc.weight[:, :5])
-        #  g1 = logits1.grad
-        #  g2 = grads['grad_cuda']
-        #  print(g2.size())
-        #  print(g1[0, 0, :2, :4])
-        #  print(g2[0, 0, :2, :4])
-        #  print((g1 - g2).abs().sum())
-        #  print(g2[0, :4])
+
+        #  o1 = one_hot
+        #  o2 = grads['one_hot']
+        #  print((o1 - o2).abs().max())
+        #  print(o1.size())
+        #  print(o2.size())
+
         with torch.no_grad():
             if (it+1) % 50 == 0:
                 print('iter: {}, ================='.format(it+1))
                 #  print(net1.fc.weight.numel())
-                print('fc weight: ', torch.mean(torch.abs(net1.fc.weight - net2.fc.weight)).item())
+                print('fc weight: ', torch.max(torch.abs(net1.fc.weight - net2.fc.weight)).item())
 
-                print('conv1 weight: ', torch.mean(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
+                print('conv1 weight: ', torch.max(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
                 print('loss: ', loss1.item() - loss2.item())

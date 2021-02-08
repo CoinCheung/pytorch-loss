@@ -95,6 +95,7 @@ __forceinline__ __device__ void compute_reduce_values(
         scalar_t val = logits[idx];
         if (val > sdata[0]) sdata[blockDim.x + 1] = val;
     }
+    __syncthreads();
 
     // compute sum of exp with and without label index
     sdata[tid] = zero;
@@ -107,6 +108,7 @@ __forceinline__ __device__ void compute_reduce_values(
     }
     reduce_sum<scalar_t>(sdata, tid);
     if (tid == 0) sdata[blockDim.x + 2] = sdata[0];
+    __syncthreads();
 
     sdata[tid] = zero;
     __syncthreads();

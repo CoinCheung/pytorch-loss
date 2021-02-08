@@ -75,7 +75,7 @@ import lovasz_softmax_cpp
 class LovaszSoftmaxFunctionV3(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd(cast_inputs=torch.float32)
+    @amp.custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, logits, labels, ignore_index):
         losses, jacc = lovasz_softmax_cpp.lovasz_softmax_forward(logits,
                 labels, ignore_index)

@@ -15,9 +15,6 @@
 #include "cumsum.hpp"
 
 #define BLOCKSIZE 1024
-// TODO: add an assert, to limit the dimsize less than 256, also limit the number of logits.numel() within limit of int32
-// TODO: check when to multiply grad_output to the logits_grad, method is add weights to different categories
-// TODO: test case should cover, n_class from 3 to 256
 
 
 // compare function for sort
@@ -46,11 +43,20 @@ public:
     }
 };
 
+template<typename T>
+class gt_op {
+public:
+    __device__ __forceinline__ T operator()(T a, T b) const {
+        /* if (a > b) return a; */
+        /* else return b; */
+        return (a > b) ? a : b;
+    }
+};
+
 template<template<typename> class Reduction, typename scalar_t>
 __device__ __forceinline__ void reduce_op(
-        scalar_t* sdata, int blocksize,
+        scalar_t* sdata, int blocksize, const int tid,
         const Reduction<scalar_t>& oper) {
-    int tid = threadIdx.x;
     __syncthreads();
     for (int s{blocksize / 2}; s > 0; s >>= 1) {
         if (tid < s) {
@@ -62,92 +68,52 @@ __device__ __forceinline__ void reduce_op(
 
 
 // kernel function for forward and backward
-// TODO: function name here
 template<typename scalar_t>
-__global__ void compute_errs(const int n_size,
-                            const int dimsize, const int m_size,
-                            const int ignore_index,
-                            const scalar_t *logits,
-                            const int64_t *labels,
-                            scalar_t *errs, 
-                            scalar_t *one_hot) {
+__global__ void compute_errs(const int n_size, const int m_size,
+                            const int ignore_index, const int64_t *labels,
+                            scalar_t *errs, scalar_t *one_hot) {
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
-    int n_samples = m_size * n_size;
     const scalar_t one(1.);
     const scalar_t minus_one(-1.);
 
-    for (int i{tid}; i < n_samples; i+=stride) {
-        int n_idx = i / m_size;
-        int m_idx = i % m_size;
-        int e_idx;
+    for (int i{tid}; i < m_size; i+=stride) {
+        int e_ind;
 
         // if ignore index, set values to minus, to send it rear
         int lb = static_cast<int>(labels[i]);
         if (lb == ignore_index) {
-            for (int j = 0; j < dimsize; ++j) {
-                e_idx = j * n_size * m_size + n_idx * m_size + m_idx;
-                errs[e_idx] = minus_one;
+            for (int j = 0; j < n_size; ++j) {
+                e_ind = j * m_size + i;
+                errs[e_ind] = minus_one;
             }
             continue;
         }
+        e_ind = lb * m_size + i;
 
         // set one hot values
-        e_idx = lb * m_size * n_size + n_idx * m_size + m_idx;
-        one_hot[e_idx] = one;
-
+        one_hot[e_ind] = one;
 
         // compute errs: 
         // errs = abs(lb_one_hot - softmax(logits.transpose(0, 1).view(c, -1)))
-        scalar_t max_val(-10000.);
-        for (int j{0}; j < dimsize; ++j) {
-            e_idx = n_idx * dimsize * m_size + j * m_size + m_idx;
-            scalar_t val = logits[e_idx];
-            if (val > max_val) max_val = val;
-            e_idx = j * n_size * m_size + n_idx * m_size + m_idx;
-            errs[e_idx] = val;
-        }
-
-        scalar_t exp_sum_val(0.);
-        for (int j{0}; j < dimsize; ++j) {
-            e_idx = j * n_size * m_size + n_idx * m_size + m_idx;
-            scalar_t val = errs[e_idx];
-            exp_sum_val += math_ops::Exp(val - max_val);
-        }
-        exp_sum_val =  one / exp_sum_val;
-
-        for (int j{0}; j < dimsize; ++j) {
-            e_idx = j * n_size * m_size + n_idx * m_size + m_idx;
-            scalar_t val = errs[e_idx];
-            errs[e_idx] = math_ops::Exp(val - max_val) * exp_sum_val;
-        }
         // (lb_one_hot - probs).abs()
-        e_idx = lb * n_size * m_size + n_idx * m_size + m_idx;
-        errs[e_idx] = one - errs[e_idx];
+        errs[e_ind] = one - errs[e_ind];
     }
-
 }
 
 
 
 template<typename scalar_t>
-__global__ void compute_n_pos_vals(scalar_t *n_pos, 
-        const scalar_t *output, const int n_size, const int m_size) {
-
-    int tid = threadIdx.x;
-    int strd = blockDim.x;
-    for (int i{tid}; i < n_size; i += strd) {
-        int ind = (i + 1) * m_size - 1; 
-        n_pos[i] = output[ind];
+__global__ void compute_jacc_iou(scalar_t *output, scalar_t *tmp,
+                    const int n_size, const int m_size) {
+    extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
+    scalar_t *shared = reinterpret_cast<scalar_t*>(sdata_raw);
+    // load n_pos to shm, n_pos is the last column of cumsum
+    if (threadIdx.x < n_size) {
+        shared[threadIdx.x] = output[(threadIdx.x + 1) * m_size - 1];
     }
-}
-
-
-template<typename scalar_t>
-__global__ void compute_jacc_iou(const scalar_t *n_pos, 
-        scalar_t *output, scalar_t *tmp,
-        const int n_size, const int m_size) {
+    __syncthreads();
 
     int n_samples = n_size * m_size;
     int t_size = gridDim.x * blockDim.x;
@@ -157,9 +123,8 @@ __global__ void compute_jacc_iou(const scalar_t *n_pos,
         int n_ind = i / m_size;
         int m_ind = i % m_size;
         scalar_t val = output[i];
-        scalar_t n_pos_val = n_pos[n_ind];
-        scalar_t int_val = n_pos_val - val;
-        scalar_t uni_val = n_pos_val - val + scalar_t(m_ind + 1);
+        scalar_t int_val = shared[n_ind] - val;
+        scalar_t uni_val = shared[n_ind] - val + scalar_t(m_ind + 1);
         tmp[i] = one - int_val / uni_val;
     }
 }
@@ -237,7 +202,7 @@ __global__ void mul_reduce_sum_by_row_per_block(scalar_t *errs,
             shared[threadIdx.x] += err_val * jacc[ind];
         }
         __syncthreads();
-        reduce_op<sum_op, scalar_t>(shared, blockDim.x, sum_op<scalar_t>());
+        reduce_op<sum_op, scalar_t>(shared, blockDim.x, threadIdx.x, sum_op<scalar_t>());
         if (threadIdx.x == 0) {
             int ind = i * gridDim.x + blockIdx.x;
             buf[ind] = shared[0];
@@ -266,7 +231,7 @@ __global__ void reduce_sum_by_row(const scalar_t *buf, scalar_t *loss ,
             shared[threadIdx.x] += buf[ind];
         }
         __syncthreads();
-        reduce_op<sum_op, scalar_t>(shared, blockDim.x, sum_op<scalar_t>());
+        reduce_op<sum_op, scalar_t>(shared, blockDim.x, threadIdx.x, sum_op<scalar_t>());
         if (threadIdx.x == 0) {
             loss[i] = shared[0];
         }
@@ -275,38 +240,48 @@ __global__ void reduce_sum_by_row(const scalar_t *buf, scalar_t *loss ,
 
 
 template<typename scalar_t>
-__global__ void compute_probs_grad(scalar_t *jacc, 
-                            const int64_t *labels, const int ignore_index,
-                            const int n_size, const int m_size) {
+__global__ void compute_probs_grad_and_transpose(const scalar_t *jacc, 
+                            const scalar_t *grad, scalar_t *grad_logits, 
+                            const int64_t *labels, const int n_size,
+                            const int dimsize, const int m_size) {
+    extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
+    scalar_t *shared = reinterpret_cast<scalar_t*>(sdata_raw);
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
-    const scalar_t zero(0.);
+    const int samplesize = n_size * dimsize * m_size;
+    const int dm_size = dimsize * m_size;
 
-    for (int i{tid}; i < m_size; i += stride) {
-        int e_idx;
+    // read to shared memory to save bandwidth
+    if (threadIdx.x < dimsize) {
+        shared[threadIdx.x] = grad[threadIdx.x];
+    }
+    __syncthreads();
 
-        // set grad to zero if it is ignored index
-        int lb = static_cast<int>(labels[i]);
-        if (lb == ignore_index) {
-            for (int j = 0; j < n_size; ++j) {
-                e_idx = j * m_size + i;
-                jacc[e_idx] = zero;
-            }
-            continue;
-        }
+    int e_ind;
+    for (int i{tid}; i < samplesize; i += stride) {
+        int n_ind = i / dm_size; 
+        int d_ind = i % dm_size;
+        int m_ind = d_ind % m_size;
+        d_ind = d_ind / m_size;
 
+        e_ind = n_ind * m_size + m_ind;
+        int lb = static_cast<int>(labels[e_ind]);
+        int e_ind = d_ind * n_size * m_size + n_ind * m_size + m_ind;
         // grad = -1 if j == lb else 1
-        e_idx = lb * m_size + i;
-        jacc[e_idx] = - jacc[e_idx];
+        if (lb == d_ind) {
+            grad_logits[i] = - jacc[e_ind] * shared[d_ind];
+        } else {
+            grad_logits[i] = jacc[e_ind] * shared[d_ind];
+        }
     }
 }
 
 
+
 template<typename scalar_t>
-__global__ void compute_softmax(const int n_size, const int dimsize, 
-                        const int m_size, const int ignore_index, 
-                        const scalar_t *logits, const int64_t *labels,
+__global__ void compute_softmax_shallow(const int n_size, const int dimsize, 
+                        const int m_size, const scalar_t *logits,
                         scalar_t *softmax) {
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -319,104 +294,190 @@ __global__ void compute_softmax(const int n_size, const int dimsize,
         int m_idx = i % m_size;
         int e_idx;
 
-        // if ignore index, set values to minus, to send it rear
-        int lb = static_cast<int>(labels[i]);
-        if (lb == ignore_index) continue;
-
         // find max val
         scalar_t max_val(-10000.);
         for (int j{0}; j < dimsize; ++j) {
             e_idx = n_idx * dimsize * m_size + j * m_size + m_idx;
             scalar_t val = logits[e_idx];
             if (val > max_val) max_val = val;
-            e_idx = j * n_size * m_size + n_idx * m_size + m_idx;
-            softmax[e_idx] = val;
         }
 
         // compute exp sum
         scalar_t exp_sum_val(0.);
         for (int j{0}; j < dimsize; ++j) {
-            e_idx = j * n_size * m_size + n_idx * m_size + m_idx;
-            scalar_t val = softmax[e_idx];
+            e_idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[e_idx];
             exp_sum_val += math_ops::Exp(val - max_val);
         }
         exp_sum_val =  one / exp_sum_val;
 
         // compute softmax
         for (int j{0}; j < dimsize; ++j) {
-            e_idx = j * n_size * m_size + n_idx * m_size + m_idx;
-            scalar_t val = softmax[e_idx];
+            e_idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[e_idx];
             softmax[e_idx] = math_ops::Exp(val - max_val) * exp_sum_val;
         }
     }
 }
 
 
-// TODO: there is generally two methods to do it, all depends on first compute S = sum(jac * s), then compute s(jac - S) 
-// The first method should be let one thread loop along the dimsize, and compute sum value, and let another loop to to compute the grad, this does not require too much shared memory
-// The second method should be depend on shared memory to compute the sum, and let each thread to compute grad
-// Current method is more close to the second method
 template<typename scalar_t>
-__global__ void compute_logits_grad(const int n_size, const int dimsize, 
+__global__ void compute_softmax_deep(const int n_size, const int dimsize, 
+                        const int m_size, const scalar_t *logits,
+                        scalar_t *softmax) {
+
+    extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
+    scalar_t *shared = reinterpret_cast<scalar_t*>(sdata_raw);
+    shared += blockDim.y * threadIdx.x;
+
+    const int samplesize = n_size * m_size;
+    const scalar_t one(1.);
+
+    int tid = threadIdx.y;
+    int sid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i{sid}; i < samplesize; i += stride) {
+        int e_idx;
+        int n_idx = i / m_size;
+        int m_idx = i % m_size;
+
+        // find max val
+        shared[tid] = scalar_t(-10000.);
+        __syncthreads();
+        for (int j{tid}; j < dimsize; j += blockDim.y) {
+            e_idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            scalar_t val = logits[e_idx];
+            if (val > shared[tid]) shared[tid] = val;
+        }
+        __syncthreads();
+        reduce_op<gt_op, scalar_t>(shared, blockDim.y, threadIdx.y, gt_op<scalar_t>());
+        scalar_t max_val = shared[0];
+        __syncthreads();
+
+        // find exp sum val
+        shared[tid] = scalar_t(0.);
+        __syncthreads();
+        for (int j{tid}; j < dimsize; j += blockDim.y) {
+            e_idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            shared[tid] += math_ops::Exp(logits[e_idx] - max_val);
+        }
+        __syncthreads();
+        reduce_op<sum_op, scalar_t>(shared, blockDim.y, threadIdx.y, sum_op<scalar_t>());
+        if (tid == 0) shared[0] = one / shared[0];
+        __syncthreads();
+
+        // compute softmax
+        for (int j{tid}; j < dimsize; j += blockDim.y) {
+            e_idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+            softmax[e_idx] = math_ops::Exp(logits[e_idx] - max_val) * shared[0];
+        }
+    }
+}
+
+
+template<typename scalar_t>
+__global__ void compute_logits_grad_shallow(const int n_size, const int dimsize, 
                         const int m_size, const int ignore_index, 
-                        const scalar_t *logits, scalar_t *jacc,
-                        scalar_t *grad_logits, const int64_t *labels) {
+                        const scalar_t *jacc, scalar_t *grad_logits, 
+                        const int64_t *labels) {
+
+    const scalar_t zero(0.);
+    const int samplesize = n_size * m_size;
+
+    int sid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    // compute grad of logits, store in grad_logits, jacc is softmax
+    for (int i{sid}; i < samplesize; i += stride) {
+        int n_ind = i / m_size;
+        int m_ind = i % m_size;
+        int e_ind;
+
+        // set grad of ignored index to be 0
+        int lb = static_cast<int>(labels[i]);
+        if (lb == ignore_index) {
+            for (int j{0}; j < dimsize; ++j) {
+                e_ind = n_ind * dimsize * m_size + j * m_size + m_ind;
+                grad_logits[e_ind] = zero;
+            }
+            continue;
+        }
+
+        scalar_t sum(0);
+        for (int j{0}; j < dimsize; ++j) {
+            e_ind = n_ind * dimsize * m_size + j * m_size + m_ind;
+            sum -= jacc[e_ind] * grad_logits[e_ind];
+        }
+        for (int j{0}; j < dimsize; ++j) {
+            e_ind = n_ind * dimsize * m_size + j * m_size + m_ind;
+            grad_logits[e_ind] = jacc[e_ind] * (sum + grad_logits[e_ind]);
+        }
+    }
+}
+
+
+template<typename scalar_t>
+__global__ void compute_logits_grad_deep(const int n_size, const int dimsize, 
+                        const int m_size, const int ignore_index,
+                        const scalar_t *jacc, scalar_t *grad_logits,
+                        const int64_t *labels) {
 
     extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
     scalar_t *shared = reinterpret_cast<scalar_t*>(sdata_raw);
 
     const scalar_t zero(0.);
     const int samplesize = n_size * m_size;
-    const int shm_offset = blockDim.y * threadIdx.x * 2;
+    const int shm_offset = blockDim.y * threadIdx.x;
+    shared += shm_offset;
 
+    int tid = threadIdx.y;
     int sid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
 
-    // compute grad of logits, store in jacc
+    // compute grad of logits, store in grad_logits, jacc is softmax
     for (int i{sid}; i < samplesize; i += stride) {
-
-        // TODO: see if we need to shrink blockDim.y to dimsize
-        if (threadIdx.y >= dimsize) continue;
-        int e_ind = threadIdx.y * samplesize + i;
+        int n_ind = i / m_size;
+        int m_ind = i % m_size;
+        int e_ind;
 
         // set grad of ignored index to be 0
         int lb = static_cast<int>(labels[i]);
         if (lb == ignore_index) {
-            jacc[e_ind] = zero;
-            __syncthreads();
-        }
-
-        // read to shared memory
-        scalar_t s_val(grad_logits[e_ind]); // s
-        shared[shm_offset + blockDim.y + threadIdx.y] = jacc[e_ind]; // jac
-        shared[shm_offset + threadIdx.y] = shared[shm_offset + blockDim.y + threadIdx.y] * s_val; // s * jac
-        __syncthreads();
-
-        // compute softmax grad
-        scalar_t g_val(0);
-        for (int j{0}; j < dimsize; ++j) {
-            if (threadIdx.y == j) {
-                g_val += shared[shm_offset + j + blockDim.y] - shared[shm_offset + j]; // (1-s) * jac
-            } else {
-                g_val += - shared[shm_offset + j]; // -s * jac
+            for (int j{tid}; j < dimsize; j += blockDim.y) {
+                e_ind = n_ind * dimsize * m_size + j * m_size + m_ind;
+                grad_logits[e_ind] = zero;
             }
+            continue;
         }
-        jacc[e_ind] = g_val * s_val; // s * g_val
+
+        shared[tid] = zero;
+        __syncthreads();
+        for (int j{tid}; j < dimsize; j += blockDim.y) {
+            e_ind = n_ind * dimsize * m_size + j * m_size + m_ind;
+            shared[tid] -= jacc[e_ind] * grad_logits[e_ind];
+        }
+        __syncthreads();
+        reduce_op<sum_op, scalar_t>(shared, blockDim.y, threadIdx.y, sum_op<scalar_t>());
+        for (int j{tid}; j < dimsize; j += blockDim.y) {
+            e_ind = n_ind * dimsize * m_size + j * m_size + m_ind;
+            grad_logits[e_ind] = jacc[e_ind] * (grad_logits[e_ind] + shared[0]);
+        }
         __syncthreads();
     }
 }
 
 
 template<typename scalar_t>
-__global__ void transpose_logits_grad(const int n_size, const int dimsize, 
-                        const int m_size, const scalar_t *jacc,
-                        scalar_t *grad_logits) {
+__global__ void transpose_softmax(const int n_size, const int dimsize, 
+                        const int m_size, scalar_t *from, scalar_t *to) {
 
     const int samplesize = n_size * dimsize * m_size;
     const int dm_size = dimsize * m_size;
+    const scalar_t zero(0.);
 
-    int tid = blockIdx.x * blockDim.y * blockDim.x + threadIdx.y * blockDim.x + threadIdx.x;
-    int stride = blockDim.y * blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
 
     for (int i{tid}; i < samplesize; i += stride) {
         int n_ind = i / dm_size; 
@@ -424,10 +485,71 @@ __global__ void transpose_logits_grad(const int n_size, const int dimsize,
         int m_ind = d_ind % m_size;
         d_ind = d_ind / m_size;
         int e_ind = d_ind * n_size * m_size + n_ind * m_size + m_ind;
-        grad_logits[i] = jacc[e_ind];
+        to[e_ind] = from[i];
+        from[i] = zero;
     }
 }
 
+
+
+void LovaszComputeErrsOneHot(const at::Tensor &logits, const at::Tensor &labels, 
+                                at::Tensor &errs, at::Tensor &jacc,
+                                const int ignore_index) {
+    const int n_size = logits.size(0);
+    const int dimsize = logits.size(1);
+    const int m_size = logits.numel() / (n_size * dimsize);
+    const int samplesize = labels.numel();
+
+    int blockx, blocky, gridx;
+    dim3 block, grid;
+    if (dimsize < 32) {
+        block = dim3(BLOCKSIZE);
+        grid = dim3(std::max(1, std::min(samplesize / BLOCKSIZE, 4096)));
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(logits.scalar_type(), "lovasz forward softmax", [&] {
+            compute_softmax_shallow<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size,
+                logits.contiguous().data_ptr<scalar_t>(), 
+                jacc.contiguous().data_ptr<scalar_t>() // store softmax
+            );
+        });
+    } else {
+        blocky = 32;
+        while (blocky < dimsize) blocky <<= 1;
+        blocky >>= 1;
+        blocky = std::min(std::max(1, blocky), BLOCKSIZE);
+        blockx = BLOCKSIZE / blocky;
+        gridx = std::min(4096, std::max(1, samplesize / blockx));
+        block = dim3(blockx, blocky);
+        grid = dim3(gridx);
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(logits.scalar_type(), "lovasz forward softmax", [&] {
+            int shm_size = sizeof(scalar_t) * BLOCKSIZE;
+            compute_softmax_deep<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size,
+                logits.contiguous().data_ptr<scalar_t>(), 
+                jacc.contiguous().data_ptr<scalar_t>() // store softmax
+            );
+        });
+    }
+
+    block = dim3(BLOCKSIZE);
+    grid = dim3(std::max(1, std::min(samplesize * dimsize / BLOCKSIZE, 4096)));
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(errs.scalar_type(), "lovasz transpose softmax", [&] {
+        transpose_softmax<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+            n_size, dimsize, m_size,
+            jacc.contiguous().data_ptr<scalar_t>(),  // set jacc to all 0
+            errs.contiguous().data_ptr<scalar_t>());
+    });
+
+    grid = dim3(std::max(1, std::min(samplesize / BLOCKSIZE, 4096)));
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(errs.scalar_type(), "lovasz forwarderrs and one hot", [&] {
+        compute_errs<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+            dimsize, samplesize, ignore_index,
+            labels.contiguous().data_ptr<int64_t>(),
+            errs.contiguous().data_ptr<scalar_t>(),
+            jacc.contiguous().data_ptr<scalar_t>() // jacc is one hot here
+        );
+    });
+}
 
 
 void LovaszComputeJacc(at::Tensor &errs, at::Tensor &output) {
@@ -435,7 +557,6 @@ void LovaszComputeJacc(at::Tensor &errs, at::Tensor &output) {
     int n_samples = errs.size(1);
     int dimsize = errs.size(0);
     auto tmp = at::empty_like(errs);
-    auto n_pos = at::zeros({dimsize}, errs.options());
 
     dim3 block(BLOCKSIZE);
     dim3 grid(max(min((int)tmp.numel() / BLOCKSIZE, 4096), 1));
@@ -459,16 +580,9 @@ void LovaszComputeJacc(at::Tensor &errs, at::Tensor &output) {
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(errs.scalar_type(), "jacc forward steps", [&] {
 
-        // set n_pos vals, obtained directly from last number of each line in cumsum
-        compute_n_pos_vals<scalar_t><<<dim3(1), block, 0, at::cuda::getCurrentCUDAStream()>>>(
-                n_pos.data_ptr<scalar_t>(),
-                output.data_ptr<scalar_t>(),
-                dimsize, n_samples);
-
-        // compute iou, store in temp memory of tmp
-        // TODO: try to use shared memory to store n_pos, so that we could better use bandwidth
-        compute_jacc_iou<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
-                n_pos.data_ptr<scalar_t>(),
+        // compute iou, store in temp memory of tmp, n_pos is the last colum of cumsum
+        int shm = sizeof(scalar_t) * BLOCKSIZE;
+        compute_jacc_iou<scalar_t><<<grid, block, shm, at::cuda::getCurrentCUDAStream()>>>(
                 output.data_ptr<scalar_t>(),
                 tmp.data_ptr<scalar_t>(),
                 dimsize, n_samples);
@@ -497,7 +611,7 @@ void LovaszComputeJacc(at::Tensor &errs, at::Tensor &output) {
 }
 
 
-at::Tensor LovaszComputeLoss(const at::Tensor &errs, const at::Tensor &jacc) {
+void LovaszComputeLoss(const at::Tensor &errs, const at::Tensor &jacc, const at::Tensor &loss) {
     const int n_size = errs.size(0);
     const int m_size = errs.size(1);
 
@@ -513,10 +627,9 @@ at::Tensor LovaszComputeLoss(const at::Tensor &errs, const at::Tensor &jacc) {
 
     // allocate memory and cuda grid/block
     auto buf = at::empty({n_size, gridx}, errs.options());
-    auto loss = at::empty({n_size}, errs.options());
 
     // call kernel
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(errs.scalar_type(), "compute loss", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(errs.scalar_type(), "compute loss per block", [&] {
 
         // multiply and reduce within each kernel
         int shm = sizeof(scalar_t) * BLOCKSIZE;
@@ -525,19 +638,19 @@ at::Tensor LovaszComputeLoss(const at::Tensor &errs, const at::Tensor &jacc) {
                 jacc.data_ptr<scalar_t>(),
                 buf.data_ptr<scalar_t>(),
                 n_size, m_size);
+    });
 
+    int blockx = 2;
+    while (blockx < gridx) blockx <<= 1;
+    if (blockx > BLOCKSIZE) blockx = BLOCKSIZE;
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(errs.scalar_type(), "compute loss reduce block", [&] {
         // reduce sum among blocks
-        // TODO: bring this parallel settings outside of the lambda
-        int blockx = 2;
-        while (blockx < gridx) blockx <<= 1;
-        shm = sizeof(scalar_t) * blockx;
+        int shm = sizeof(scalar_t) * blockx;
         reduce_sum_by_row<scalar_t><<<dim3(1, gridy), dim3(blockx), shm, at::cuda::getCurrentCUDAStream()>>>(
                 buf.data_ptr<scalar_t>(),
                 loss.data_ptr<scalar_t>(),
                 n_size, gridx);
     });
-
-    return loss;
 }
 
 
@@ -548,42 +661,29 @@ std::tuple<at::Tensor, at::Tensor> Lovasz_softmax_forward_cuda(const at::Tensor 
     // CHECK type and shape
     AT_ASSERTM(logits.device().type() == c10::kCUDA, "logits should be cuda");
     AT_ASSERTM(labels.device().type() == c10::kCUDA, "labels should be cuda");
+    AT_ASSERTM(logits.numel() < (1L << 31), "input tensor too large, int32 type will overflow");
+    AT_ASSERTM(logits.size(1) < BLOCKSIZE, "num of classes should be less than BLOCKSIZE");
 
 
-    // TODO: check n_classes to determine parallel method
-    const int n_size = logits.size(0);
-    const int dimsize = logits.size(1);
-    const int m_size = logits.numel() / (n_size * dimsize);
-    const int samplesize = labels.numel();
-    dim3 grid(std::min(
-        samplesize / BLOCKSIZE, 4096));
-    dim3 block(BLOCKSIZE);
     // allocate memory and cuda grid/block
+    const int dimsize = logits.size(1);
     auto errs = at::empty_like(logits).reshape({dimsize, -1});
-    auto jacc = at::zeros_like(logits).reshape({dimsize, -1});
-    if (errs.numel() == 0 | jacc.numel() == 0) {
+    auto jacc = at::empty_like(logits).reshape({dimsize, -1});
+    auto loss = at::empty({dimsize}, logits.options());
+    if (errs.numel() == 0 | jacc.numel() == 0 | loss.numel() == 0) {
         THCudaCheck(cudaGetLastError());
         return std::make_tuple(errs, jacc);
     }
 
-    // call kernel to compute errs
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(errs.scalar_type(), "errors forward", [&] {
-        int shm = sizeof(scalar_t) * dimsize;
-        compute_errs<scalar_t><<<grid, block, shm, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size, ignore_index,
-            logits.contiguous().data_ptr<scalar_t>(), 
-            labels.contiguous().data_ptr<int64_t>(), 
-            errs.contiguous().data_ptr<scalar_t>(),
-            jacc.contiguous().data_ptr<scalar_t>() // jacc is one hot here
-        );
-    });
+    // Compute errs and one hot
+    LovaszComputeErrsOneHot(logits, labels, errs, jacc, ignore_index);
+
     // compute jacc index, which is re-ordered to the original order
     // so that we could re-use it in backward pass
     LovaszComputeJacc(errs, jacc);
 
     // reduce sum operation
-    // TODO: define the loss tensor outsize, and pass it as an arg of the function
-    auto loss = LovaszComputeLoss(errs, jacc);
+    LovaszComputeLoss(errs, jacc, loss);
 
     THCudaCheck(cudaGetLastError());
     return std::make_tuple(loss, jacc);
@@ -607,46 +707,66 @@ at::Tensor Lovasz_softmax_backward_cuda(const at::Tensor &grad, const at::Tensor
     auto grad_logits = at::empty_like(logits);
 
     // call kernel
-    dim3 block(BLOCKSIZE);
-    dim3 grid(std::max(1, std::min(samplesize / BLOCKSIZE, 4096)));
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lovasz backward probs", [&] {
-        // compute grad of probs, store in jacc
-        compute_probs_grad<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
-            jacc.contiguous().data_ptr<scalar_t>(),
-            labels.contiguous().data_ptr<int64_t>(), 
-            ignore_index, dimsize, samplesize);
-        compute_softmax<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size, ignore_index,
-            logits.contiguous().data_ptr<scalar_t>(), 
-            labels.contiguous().data_ptr<int64_t>(), 
-            grad_logits.contiguous().data_ptr<scalar_t>() // store softmax
-        );
+    int blockx, blocky, gridx;
+    dim3 block, grid;
 
-    });
-
-    int blocky = 32;
-    while (blocky < dimsize) blocky += 32;
-    int blockx = BLOCKSIZE / blocky;
-    int gridx = std::min(4096, std::max(0, samplesize / blockx));
-    block = dim3(blockx, blocky);
+    gridx = std::max(1, std::min(samplesize * dimsize / BLOCKSIZE, 4096));
+    block = dim3(BLOCKSIZE);
     grid = dim3(gridx);
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lovasz backward logits", [&] {
-        // compute grad of logits, store it jacc
-        int shm_size = sizeof(scalar_t) * BLOCKSIZE * 2;
-        compute_logits_grad<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size, ignore_index,
-            logits.contiguous().data_ptr<scalar_t>(),
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lovasz backward probs", [&] {
+        // compute grad of probs, just multiply to jacc
+        // store at grad_logits and change from dnm to ndm layout
+        int shm = BLOCKSIZE * sizeof(scalar_t);
+        compute_probs_grad_and_transpose<scalar_t><<<grid, block, shm, at::cuda::getCurrentCUDAStream()>>>(
             jacc.contiguous().data_ptr<scalar_t>(),
+            grad.contiguous().data_ptr<scalar_t>(),
             grad_logits.contiguous().data_ptr<scalar_t>(),
-            labels.contiguous().data_ptr<int64_t>());
-
-        // transpose back to nchw
-        transpose_logits_grad<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
-            n_size, dimsize, m_size,
-            jacc.contiguous().data_ptr<scalar_t>(),
-            grad_logits.contiguous().data_ptr<scalar_t>());
+            labels.contiguous().data_ptr<int64_t>(), 
+            n_size, dimsize, m_size);
     });
 
+    // from now on, grad_probs is stored in grad_logits, softmax is on jacc
+    // compute grad of logits, store it grad_logits
+    if (dimsize < 32) {
+        block = dim3(BLOCKSIZE);
+        grid = dim3(std::max(1, std::min(samplesize / BLOCKSIZE, 4096)));
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lovasz backward logits", [&] {
+            compute_softmax_shallow<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size,
+                logits.contiguous().data_ptr<scalar_t>(), 
+                jacc.contiguous().data_ptr<scalar_t>() // store softmax
+            );
+            compute_logits_grad_shallow<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, ignore_index,
+                jacc.contiguous().data_ptr<scalar_t>(),
+                grad_logits.contiguous().data_ptr<scalar_t>(),
+                labels.contiguous().data_ptr<int64_t>()
+            );
+        });
+    } else {
+        blocky = 32;
+        while (blocky < dimsize) blocky <<= 1;
+        blocky >>= 1;
+        blocky = std::min(std::max(1, blocky), BLOCKSIZE);
+        blockx = BLOCKSIZE / blocky;
+        gridx = std::min(4096, std::max(1, samplesize / blockx));
+        block = dim3(blockx, blocky);
+        grid = dim3(gridx);
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(grad_logits.scalar_type(), "lovasz backward logits", [&] {
+            int shm_size = sizeof(scalar_t) * BLOCKSIZE;
+            compute_softmax_deep<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size,
+                logits.contiguous().data_ptr<scalar_t>(), 
+                jacc.contiguous().data_ptr<scalar_t>() // store softmax
+            );
+            compute_logits_grad_deep<scalar_t><<<grid, block, shm_size, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, ignore_index,
+                jacc.contiguous().data_ptr<scalar_t>(),
+                grad_logits.contiguous().data_ptr<scalar_t>(),
+                labels.contiguous().data_ptr<int64_t>()
+            );
+        });
+    }
 
     THCudaCheck(cudaGetLastError());
     return grad_logits;

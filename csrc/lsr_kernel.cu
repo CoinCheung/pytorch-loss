@@ -105,6 +105,7 @@ __global__ void LSRLossForward(const int n_size,
         }
         lsr_space::reduce_sum<scalar_t>(sdata, blockDim.x, tid);
         if (tid == 0) losses[i] = sdata[0];
+        __syncthreads();
     }
 }
 
