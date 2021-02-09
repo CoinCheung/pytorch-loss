@@ -5,6 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.cuda.amp as amp
 
 
 ##
@@ -23,6 +24,7 @@ class HSwishV1(nn.Module):
 class HSwishFunctionV2(torch.autograd.Function):
 
     @staticmethod
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, feat):
         #  act = (feat + 3).mul_(feat).div_(6).clip_(0)
         act = F.relu6(feat + 3).mul_(feat).div_(6)
@@ -30,6 +32,7 @@ class HSwishFunctionV2(torch.autograd.Function):
         return act
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         feat = ctx.variables
         grad = F.relu6(feat + 3).div_(6)
@@ -56,11 +59,13 @@ import swish_cpp
 class HSwishFunctionV3(torch.autograd.Function):
 
     @staticmethod
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, feat):
         ctx.feat = feat
         return swish_cpp.hswish_forward(feat)
 
     @staticmethod
+    @amp.custom_bwd
     def backward(ctx, grad_output):
         feat = ctx.feat
         return swish_cpp.hswish_backward(grad_output, feat)
