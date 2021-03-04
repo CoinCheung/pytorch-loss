@@ -25,8 +25,11 @@ class LabelSmoothSoftmaxCEV1(nn.Module):
 
     def forward(self, logits, label):
         '''
-        args: logits: tensor of shape (N, C, H, W)
-        args: label: tensor of shape(N, H, W)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LabelSmoothSoftmaxCEV1()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         # overcome ignored label
         logits = logits.float() # use fp32 to avoid nan
@@ -57,7 +60,7 @@ class LabelSmoothSoftmaxCEV1(nn.Module):
 class LSRCrossEntropyFunctionV2(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, label, lb_smooth, lb_ignore):
         # prepare label
         num_classes = logits.size(1)
@@ -101,6 +104,13 @@ class LabelSmoothSoftmaxCEV2(nn.Module):
         self.lb_ignore = ignore_index
 
     def forward(self, logits, labels):
+        '''
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LabelSmoothSoftmaxCEV2()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
+        '''
         losses = LSRCrossEntropyFunctionV2.apply(
                 logits, labels, self.lb_smooth, self.lb_ignore)
         if self.reduction == 'sum':
@@ -118,7 +128,7 @@ class LSRCrossEntropyFunctionV3(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, lb_smooth, lb_ignore):
         losses = lsr_cpp.lsr_forward(logits, labels, lb_ignore, lb_smooth)
 
@@ -144,6 +154,13 @@ class LabelSmoothSoftmaxCEV3(nn.Module):
         self.lb_ignore = ignore_index
 
     def forward(self, logits, labels):
+        '''
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LabelSmoothSoftmaxCEV3()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
+        '''
         losses = LSRCrossEntropyFunctionV3.apply(
                 logits, labels, self.lb_smooth, self.lb_ignore)
         if self.reduction == 'sum':

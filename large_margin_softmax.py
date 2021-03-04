@@ -24,8 +24,11 @@ class LargeMarginSoftmaxV1(nn.Module):
 
     def forward(self, logits, label):
         '''
-        args: logits: tensor of shape (N, C, H, W, ...)
-        args: label: tensor of shape(N, H, W, ...)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LargeMarginSoftmaxV1()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         # overcome ignored label
         logits = logits.float()
@@ -73,8 +76,11 @@ class LargeMarginSoftmaxV2(nn.Module):
 
     def forward(self, logits, labels):
         '''
-        args: logits: tensor of shape (N, C, H, W, ...)
-        args: label: tensor of shape(N, H, W, ...)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LargeMarginSoftmaxV2()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         logits = logits.float()
         mask = labels == self.ignore_index
@@ -93,7 +99,7 @@ class LargeMarginSoftmaxV2(nn.Module):
 class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, lam=0.3):
         num_classes = logits.size(1)
         coeff = 1. / (num_classes - 1.)
@@ -150,8 +156,11 @@ class LargeMarginSoftmaxV3(nn.Module):
 
     def forward(self, logits, labels):
         '''
-        args: logits: tensor of shape (N, C, H, W, ...)
-        args: label: tensor of shape(N, H, W, ...)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LargeMarginSoftmaxV3()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         logits = logits.float()
         losses = LargeMarginSoftmaxFuncV3.apply(
@@ -171,7 +180,7 @@ class LargeMarginSoftmaxFuncV3(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, lam=0.3, ignore_index=255):
         losses = large_margin_cpp.l_margin_forward(logits, labels, lam, ignore_index)
 
@@ -277,18 +286,15 @@ if __name__ == '__main__':
 
         #  print('net2.weight: ', net2.out.weight[0, 0, :, 0])
         #  net2.load_state_dict(net1.state_dict())
-
-        print(grads)
-
-        #  with torch.no_grad():
-        #      if (it+1) % 50 == 0:
-        #      #  if True:
-        #          #  print(loss1.item())
-        #          #  print(loss2.item())
-        #          #  break
-        #          print('iter: {}, ================='.format(it+1))
-        #          print('out.weight: ', torch.mean(torch.abs(net1.out.weight - net2.out.weight)).item())
-        #          print('conv1.weight: ', torch.mean(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
-        #          #  print(net1.out.weight.mean().item())
-        #          #  print(net2.out.weight.mean().item())
-        #          print('\nloss: ', loss1.item() - loss2.item())
+        with torch.no_grad():
+            if (it+1) % 50 == 0:
+            #  if True:
+                #  print(loss1.item())
+                #  print(loss2.item())
+                #  break
+                print('iter: {}, ================='.format(it+1))
+                print('out.weight: ', torch.mean(torch.abs(net1.out.weight - net2.out.weight)).item())
+                print('conv1.weight: ', torch.mean(torch.abs(net1.conv1.weight - net2.conv1.weight)).item())
+                #  print(net1.out.weight.mean().item())
+                #  print(net2.out.weight.mean().item())
+                print('\nloss: ', loss1.item() - loss2.item())

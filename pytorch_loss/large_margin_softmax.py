@@ -24,8 +24,11 @@ class LargeMarginSoftmaxV1(nn.Module):
 
     def forward(self, logits, label):
         '''
-        args: logits: tensor of shape (N, C, H, W, ...)
-        args: label: tensor of shape(N, H, W, ...)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LargeMarginSoftmaxV1()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         # overcome ignored label
         logits = logits.float()
@@ -73,8 +76,11 @@ class LargeMarginSoftmaxV2(nn.Module):
 
     def forward(self, logits, labels):
         '''
-        args: logits: tensor of shape (N, C, H, W, ...)
-        args: label: tensor of shape(N, H, W, ...)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LargeMarginSoftmaxV2()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         logits = logits.float()
         mask = labels == self.ignore_index
@@ -150,8 +156,11 @@ class LargeMarginSoftmaxV3(nn.Module):
 
     def forward(self, logits, labels):
         '''
-        args: logits: tensor of shape (N, C, H, W, ...)
-        args: label: tensor of shape(N, H, W, ...)
+        Same usage method as nn.CrossEntropyLoss:
+            >>> criteria = LargeMarginSoftmaxV3()
+            >>> logits = torch.randn(8, 19, 384, 384) # nchw, float/half
+            >>> lbs = torch.randint(0, 19, (8, 384, 384)) # nhw, int64_t
+            >>> loss = criteria(logits, lbs)
         '''
         logits = logits.float()
         losses = LargeMarginSoftmaxFuncV3.apply(
