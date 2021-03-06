@@ -18,7 +18,7 @@
 #include <cfloat>
 
 
-#define BLOCKSIZE 1024
+#define BLOCKSIZE 512
 
 
 

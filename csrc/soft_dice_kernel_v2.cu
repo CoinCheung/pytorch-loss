@@ -16,7 +16,7 @@
 using std::cout;
 using std::endl;
 
-#define BLOCKSIZE 1024
+#define BLOCKSIZE 512
 
 
 namespace soft_dice_space {

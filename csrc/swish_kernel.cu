@@ -12,7 +12,7 @@
 #include <cfloat>
 
 
-#define BLOCKSIZE 1024
+#define BLOCKSIZE 512
 
 
 // NOTE: If use constant number such as 1. or 2., must use scalar_t(1.) or scalar_t(2.), or the values will be casted into double type.

@@ -14,7 +14,7 @@
 #include "common.hpp"
 #include "cumsum.hpp"
 
-#define BLOCKSIZE 1024
+#define BLOCKSIZE 512
 
 
 // compare function for sort

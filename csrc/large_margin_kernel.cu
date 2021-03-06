@@ -16,7 +16,7 @@
 using std::cout;
 using std::endl;
 
-#define BLOCKSIZE 1024
+#define BLOCKSIZE 512
 
 // TODO: 
 // at::numeric_limits<scalar_t>::lowest;
