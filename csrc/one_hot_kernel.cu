@@ -20,7 +20,9 @@ using std::cout;
 using std::endl;
 using std::vector;
 
-#define BLOCKSIZE 1024
+#define BLOCKSIZE 512
+#define inf_p 1000000L 
+#define inf_n -1000000L 
 
 
 namespace one_hot_space {
@@ -66,7 +68,7 @@ __global__ void find_max_min_block(int64_t *data, int64_t *buffer, int samplesiz
     const int sample_offset = gridDim.x * blockDim.x;
 
     // find max and min of each block
-    int64_t min{100000L}, max{-100000L};
+    int64_t min{inf_p}, max{inf_n};
     for (int i{tid}; i < samplesize; i += sample_offset) {
         int64_t val = data[i];
         if (val == ignore_index) continue;
@@ -98,23 +100,14 @@ __global__ void find_max_min_reduce(int64_t *buffer, int64_t buf_len) {
     // This function is designed for only one block
     extern __shared__ __align__(sizeof(int64_t)) unsigned char sdata_raw[];
     int64_t *sdata = reinterpret_cast<int64_t*>(sdata_raw);
-    const int tid = blockIdx.x;
+    const int tid = threadIdx.x;
 
-    int64_t min{100000L}, max{-100000L};
+    int64_t min{inf_p}, max{inf_n};
     for (int i{tid}; i < buf_len; i += blockDim.x) {
         int64_t val = buffer[i];
         if (val > max) max = val;
         val = buffer[buf_len + i];
         if (val < min) min = val;
-    }
-
-    // find min
-    sdata[threadIdx.x] = min;
-    __syncthreads();
-
-    reduce_op<min_op, int64_t>(sdata, blockDim.x, min_op<int64_t>());
-    if (threadIdx.x == 0) {
-        buffer[0] = sdata[0];
     }
 
     // find max
@@ -123,8 +116,18 @@ __global__ void find_max_min_reduce(int64_t *buffer, int64_t buf_len) {
 
     reduce_op<max_op, int64_t>(sdata, blockDim.x, max_op<int64_t>());
     if (threadIdx.x == 0) {
+        buffer[0] = sdata[0];
+    }
+
+    // find min
+    sdata[threadIdx.x] = min;
+    __syncthreads();
+
+    reduce_op<min_op, int64_t>(sdata, blockDim.x, min_op<int64_t>());
+    if (threadIdx.x == 0) {
         buffer[buf_len] = sdata[0];
     }
+
 }
 
 
@@ -286,7 +289,7 @@ at::Tensor Label_one_hot_cuda(const at::Tensor &labels,
     const int m_size = datasize / (n_size * dimsize);
 
     // find max and min and check
-    vector<int64_t> maxmin{-1000000L, 1000000L}; // 0-max, 1-min
+    vector<int64_t> maxmin{inf_n, inf_p}; // 0-max, 1-min
     one_hot_space::find_max_min(
             labels, samplesize, ignore_index, &maxmin[0]);
     if (maxmin[0] > min_len || maxmin[1] < 0) {
