@@ -18,7 +18,7 @@
 using std::cout;
 using std::endl;
 
-#define BLOCKSIZE 1024
+#define BLOCKSIZE 512
 
 
 namespace ohem_space {
