@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.cuda.amp as amp
 
-grads = {}
+#  grads = {}
 
 ##
 # version 1: use torch.autograd
@@ -80,7 +80,7 @@ class LovaszSoftmaxFunctionV3(torch.autograd.Function):
         losses, jacc = lovasz_softmax_cpp.lovasz_softmax_forward(logits,
                 labels, ignore_index)
         ctx.vars = logits, labels, jacc, ignore_index
-        grads['one_hot'] = jacc
+        #  grads['one_hot'] = jacc
         return losses
 
     @staticmethod
