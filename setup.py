@@ -37,6 +37,9 @@ setup(
         cpp_extension.CUDAExtension(
             'lovasz_softmax_cpp',
             ['csrc/lovasz_softmax.cu']),
+        cpp_extension.CUDAExtension(
+            'taylor_softmax_cpp',
+            ['csrc/taylor_softmax.cu']),
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension},
     packages=find_packages()

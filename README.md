@@ -39,7 +39,8 @@ from pytorch_loss import OhemCELoss, OhemLargeMarginLoss
 from pytorch_loss import LovaszSoftmaxV1, LovaszSoftmaxV3
 from pytorch_loss import TaylorCrossEntropyLoss
 
-from pytorch_loss import TaylorSoftmax
+from pytorch_loss import TaylorSoftmaxV1, TaylorSoftmaxV3
+from pytorch_loss import LogTaylorSoftmaxV1, LogTaylorSoftmaxV3
 
 from pytorch_loss import CoordConv2d, DY_Conv2d
 ```
