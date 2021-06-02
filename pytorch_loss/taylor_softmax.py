@@ -146,12 +146,12 @@ class LogTaylorSoftmaxV3(nn.Module):
 ### SoftmaxCrossEntropy
 ##
 # version 1: use torch.autograd
-class TaylorCrossEntropyLoss(nn.Module):
+class TaylorCrossEntropyLossV1(nn.Module):
     '''
     This is the autograd version
     '''
     def __init__(self, n=2, ignore_index=-1, reduction='mean'):
-        super(TaylorCrossEntropyLoss, self).__init__()
+        super(TaylorCrossEntropyLossV1, self).__init__()
         assert n % 2 == 0
         self.taylor_softmax = LogTaylorSoftmaxV1(dim=1, n=n)
         self.reduction = reduction
@@ -160,7 +160,7 @@ class TaylorCrossEntropyLoss(nn.Module):
     def forward(self, logits, labels):
         '''
         usage similar to nn.CrossEntropyLoss:
-            >>> crit = TaylorCrossEntropyLoss(n=4)
+            >>> crit = TaylorCrossEntropyLossV1(n=4)
             >>> inten = torch.randn(1, 10, 64, 64)
             >>> label = torch.randint(0, 10, (1, 64, 64))
             >>> out = crit(inten, label)
@@ -170,6 +170,31 @@ class TaylorCrossEntropyLoss(nn.Module):
                 ignore_index=self.ignore_index)
         return loss
 
+##
+# version 3: use cuda
+class TaylorCrossEntropyLossV3(nn.Module):
+    '''
+    This is the autograd version
+    '''
+    def __init__(self, n=2, ignore_index=-1, reduction='mean'):
+        super(TaylorCrossEntropyLossV3, self).__init__()
+        assert n % 2 == 0
+        self.taylor_softmax = LogTaylorSoftmaxV3(dim=1, n=n)
+        self.reduction = reduction
+        self.ignore_index = ignore_index
+
+    def forward(self, logits, labels):
+        '''
+        usage similar to nn.CrossEntropyLoss:
+            >>> crit = TaylorCrossEntropyLossV3(n=4)
+            >>> inten = torch.randn(1, 10, 64, 64)
+            >>> label = torch.randint(0, 10, (1, 64, 64))
+            >>> out = crit(inten, label)
+        '''
+        log_probs = self.taylor_softmax(logits)
+        loss = F.nll_loss(log_probs, labels, reduction=self.reduction,
+                ignore_index=self.ignore_index)
+        return loss
 
 
 if __name__ == '__main__':
