@@ -11,10 +11,11 @@
 #include <cuda_runtime.h>
 #include <cfloat>
 
-#include <iostream>
+#include "common.hpp"
 
-using std::cout;
-using std::endl;
+using math_ops::Exp;
+using math_ops::Pow;
+
 
 #define BLOCKSIZE 512
 
@@ -53,7 +54,7 @@ __global__ void compute_numer_denor(const int batchsize,
                             const int sample_size,
                             const int n_blockxs_sample,
                             const scalar_t *logits,
-                            const int64_t *labels,
+                            const scalar_t *labels,
                             scalar_t *numer,
                             scalar_t *denor,
                             const float p) {
@@ -76,7 +77,6 @@ __global__ void compute_numer_denor(const int batchsize,
     int bstrd = gridDim.x * blockDim.y;
     int n_sample_blocks = n_blockxs_sample * batchsize;
 
-    // TODO: exp use different types
     const scalar_t one(1.);
     for (int i{bid}; i < n_sample_blocks; i += bstrd) {
         int sample_start = (i / n_blockxs_sample) * sample_size;
@@ -84,11 +84,12 @@ __global__ void compute_numer_denor(const int batchsize,
 
         scalar_t v_numer{0}, v_denor{0};
         for (int j{local_tid}; j < sample_size; j += tstrd) {
-            scalar_t prob = one / (one + exp(-logits[j + sample_start]));
-            scalar_t lb = static_cast<scalar_t>(labels[j + sample_start]);
-            v_numer += prob * lb * 2;
-            v_denor += pow(prob, p) + lb;
+            scalar_t prob = one / (one + Exp(-logits[j + sample_start]));
+            scalar_t lb = labels[j + sample_start];
+            v_numer += prob * lb * scalar_t(2.);
+            v_denor += Pow(prob, scalar_t(p)) + lb;
         }
+        __syncthreads();
         sdata[tid] = v_numer;
         __syncthreads();
         soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
@@ -98,6 +99,7 @@ __global__ void compute_numer_denor(const int batchsize,
         if (tid == 0) {
             numer[i] = sdata[0];
         }
+        __syncthreads();
         sdata[tid] = v_denor;
         __syncthreads();
         soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
@@ -113,8 +115,8 @@ __global__ void compute_numer_denor(const int batchsize,
 
 template<typename scalar_t>
 __global__ void SoftDiceForward(const int batchsize, const int n_blockxs_sample,
-                            scalar_t *numer,
-                            scalar_t *denor,
+                            const scalar_t *numer,
+                            const scalar_t *denor,
                             scalar_t *losses,
                             const float smooth) {
     extern __shared__ __align__(sizeof(scalar_t)) unsigned char sdata_raw[];
@@ -135,6 +137,7 @@ __global__ void SoftDiceForward(const int batchsize, const int n_blockxs_sample,
         }
 
         // reduce numer
+        __syncthreads();
         sdata[tid] = v_numer;
         __syncthreads();
         soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
@@ -144,6 +147,7 @@ __global__ void SoftDiceForward(const int batchsize, const int n_blockxs_sample,
         v_numer = sdata[0];
 
         // reduce denorm
+        __syncthreads();
         sdata[tid] = v_denor;
         __syncthreads();
         soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
@@ -183,6 +187,7 @@ __global__ void reduce_numer_denor(const int batchsize, const int n_blockxs_samp
         }
 
         // reduce numer
+        __syncthreads();
         sdata[tid] = v_numer;
         __syncthreads();
         soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
@@ -194,6 +199,7 @@ __global__ void reduce_numer_denor(const int batchsize, const int n_blockxs_samp
         }
 
         // reduce denorm
+        __syncthreads();
         sdata[tid] = v_denor;
         __syncthreads();
         soft_dice_space::reduce_op<soft_dice_space::sum_op, scalar_t>(
@@ -211,7 +217,7 @@ template<typename scalar_t>
 __global__ void SoftDiceBackward(const int batchsize, const int sample_size, 
                             const int n_blockxs_sample,
                              const scalar_t *logits,
-                             const int64_t *labels,
+                             const scalar_t *labels,
                              const scalar_t *grad,
                              const scalar_t *numer,
                              const scalar_t *denor,
@@ -224,6 +230,7 @@ __global__ void SoftDiceBackward(const int batchsize, const int sample_size,
 
     const scalar_t one(1.);
     const scalar_t two(2.);
+    const scalar_t v_p(p);
     int n_sample_blocks = n_blockxs_sample * batchsize;
     for (int i{bid}; i < n_sample_blocks; i += bstrd) {
         int sample_idx = i / n_blockxs_sample;
@@ -235,16 +242,13 @@ __global__ void SoftDiceBackward(const int batchsize, const int sample_size,
         scalar_t grad_val = grad[sample_idx];
 
         for (int j{local_tid}; j < sample_size; j += tstrd) {
-            scalar_t prob = one / (one + exp(-logits[j + sample_start]));
-            int64_t lb = labels[j + sample_start];
-            scalar_t m = v_numer - two * (prob * static_cast<scalar_t>(lb));
-            scalar_t n = v_denor - powf(prob, p);
-            scalar_t g = -pow(prob, p - one) * p * m;
-            if (lb == 1L) {
-                g += pow(prob, p) * two * (one - p) + (n * two);
-            }
-            g = - (g / powf(powf(prob, p) + n, two)) * prob * (one - prob);
-            grad_logits[j + sample_start] = grad_val * g;
+            scalar_t prob = one / (one + Exp(-logits[j + sample_start]));
+            scalar_t lb = labels[j + sample_start];
+
+            scalar_t term1 = v_p * Pow(prob, scalar_t(p)) * (one - prob) * v_numer / Pow(v_denor, two);
+            scalar_t term2 = two * lb * prob * (one - prob) / v_denor;
+
+            grad_logits[j + sample_start] = grad_val * (term1 - term2);
         }
     }
 }
@@ -305,7 +309,7 @@ at::Tensor SoftDice_forward_cuda(const at::Tensor &logits,
         compute_numer_denor<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             batchsize, sample_size, n_blockxs_sample,
             logits.contiguous().data_ptr<scalar_t>(),
-            labels.contiguous().data_ptr<int64_t>(),
+            labels.contiguous().data_ptr<scalar_t>(),
             numer.contiguous().data_ptr<scalar_t>(),
             denor.contiguous().data_ptr<scalar_t>(),
             p
@@ -375,7 +379,7 @@ at::Tensor SoftDice_backward_cuda(const at::Tensor &grad,
         compute_numer_denor<scalar_t><<<grid1, block1, shm_size, at::cuda::getCurrentCUDAStream()>>>(
             batchsize, sample_size, n_blockxs_sample,
             logits.contiguous().data_ptr<scalar_t>(),
-            labels.contiguous().data_ptr<int64_t>(),
+            labels.contiguous().data_ptr<scalar_t>(),
             numer.contiguous().data_ptr<scalar_t>(),
             denor.contiguous().data_ptr<scalar_t>(),
             p
@@ -391,7 +395,7 @@ at::Tensor SoftDice_backward_cuda(const at::Tensor &grad,
         SoftDiceBackward<scalar_t><<<grid1, block1, 0, at::cuda::getCurrentCUDAStream()>>>(
             batchsize, sample_size, n_blockxs_sample,
             logits.contiguous().data_ptr<scalar_t>(), 
-            labels.contiguous().data_ptr<int64_t>(),
+            labels.contiguous().data_ptr<scalar_t>(),
             grad.contiguous().data_ptr<scalar_t>(),
             numer.contiguous().data_ptr<scalar_t>(),
             denor.contiguous().data_ptr<scalar_t>(),

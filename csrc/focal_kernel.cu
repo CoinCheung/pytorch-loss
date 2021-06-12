@@ -79,7 +79,7 @@ __global__ void FocalLossBackward(const int nthreads,
         }
         scalar_t ce = lb * alpha * log_p + (one - lb) * (one - alpha) * log_1_p;
         scalar_t coeff = - Pow(Abs(lb - prob), gamma);
-        scalar_t d_ce = lb * alpha - prob * (one - lb - alpha + 2 * lb * alpha);
+        scalar_t d_ce = lb * alpha - prob * (one - lb - alpha + scalar_t(2) * lb * alpha);
         scalar_t d_coeff = gamma * Pow(Abs(lb - prob), gamma - one) * prob * (one - prob);
         if (lb < prob) {
             d_coeff = - d_coeff;

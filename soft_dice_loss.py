@@ -18,27 +18,23 @@ class SoftDiceLossV1(nn.Module):
     '''
     def __init__(self,
                  p=1,
-                 smooth=1,
-                 reduction='mean'):
+                 smooth=1):
         super(SoftDiceLossV1, self).__init__()
         self.p = p
         self.smooth = smooth
-        self.reduction = reduction
 
     def forward(self, logits, labels):
         '''
-        args: logits: tensor of shape (N, H, W)
-        args: label: tensor of shape(N, H, W)
+        inputs:
+            logits: tensor of shape (N, H, W, ...)
+            label: tensor of shape(N, H, W, ...)
+        output:
+            loss: tensor of shape(1, )
         '''
         probs = torch.sigmoid(logits)
-        numer = (probs * labels).sum(dim=(1, 2))
-        denor = (probs.pow(self.p) + labels).sum(dim=(1, 2))
+        numer = (probs * labels).sum()
+        denor = (probs.pow(self.p) + labels.pow(self.p)).sum()
         loss = 1. - (2 * numer + self.smooth) / (denor + self.smooth)
-
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        elif self.reduction == 'sum':
-            loss = loss.sum()
         return loss
 
 
@@ -50,23 +46,22 @@ class SoftDiceLossV2(nn.Module):
     '''
     def __init__(self,
                  p=1,
-                 smooth=1,
-                 reduction='mean'):
+                 smooth=1):
         super(SoftDiceLossV2, self).__init__()
         self.p = p
         self.smooth = smooth
-        self.reduction = reduction
 
     def forward(self, logits, labels):
         '''
-        args: logits: tensor of shape (N, H, W)
-        args: label: tensor of shape(N, H, W)
+        inputs:
+            logits: tensor of shape (N, H, W, ...)
+            label: tensor of shape(N, H, W, ...)
+        output:
+            loss: tensor of shape(1, )
         '''
+        logits = logits.view(1, -1)
+        labels = labels.view(1, -1)
         loss = SoftDiceLossV2Func.apply(logits, labels, self.p, self.smooth)
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        elif self.reduction == 'sum':
-            loss = loss.sum()
         return loss
 
 
@@ -77,11 +72,18 @@ class SoftDiceLossV2Func(torch.autograd.Function):
     @staticmethod
     @amp.custom_fwd
     def forward(ctx, logits, labels, p, smooth):
-        logits = logits.float()
+        '''
+        inputs:
+            logits: (N, L)
+            labels: (N, L)
+        outpus:
+            loss: (N,)
+        '''
+        #  logits = logits.float()
 
         probs = torch.sigmoid(logits)
-        numer = 2 * (probs * labels).sum(dim=(1, 2)) + smooth
-        denor = (probs.pow(p) + labels).sum(dim=(1, 2)) + smooth
+        numer = 2 * (probs * labels).sum(dim=1) + smooth
+        denor = (probs.pow(p) + labels.pow(p)).sum(dim=1) + smooth
         loss = 1. - numer / denor
 
         ctx.vars = probs, labels, numer, denor, p, smooth
@@ -95,15 +97,14 @@ class SoftDiceLossV2Func(torch.autograd.Function):
         '''
         probs, labels, numer, denor, p, smooth = ctx.vars
 
-        M = numer.view(-1, 1, 1) - (probs * labels).mul_(2)
-        N = denor.view(-1, 1, 1) - probs.pow(p)
+        numer, denor = numer.view(-1, 1), denor.view(-1, 1)
 
-        mppi_1 = probs.pow(p - 1).mul_(p).mul_(M)
-        grads = torch.where(labels == 1,
-                probs.pow(p).mul_(2 * (1. - p)) - mppi_1 + N.mul_(2),
-                -mppi_1)
-        grads = grads.div_((probs.pow(p) + N).pow(2)).mul_(probs).mul_(1. - probs)
-        grads = grads.mul_(grad_output.view(-1, 1, 1)).neg_()
+        term1 = (1. - probs).mul_(2).mul_(labels).mul_(probs).div_(denor)
+
+        term2 = probs.pow(p).mul_(1. - probs).mul_(numer).mul_(p).div_(denor.pow_(2))
+
+        grads = term2.sub_(term1).mul_(grad_output)
+
         return grads, None, None, None
 
 
@@ -115,23 +116,22 @@ class SoftDiceLossV3(nn.Module):
     '''
     def __init__(self,
                  p=1,
-                 smooth=1.,
-                 reduction='mean'):
+                 smooth=1.):
         super(SoftDiceLossV3, self).__init__()
         self.p = p
         self.smooth = smooth
-        self.reduction = reduction
 
     def forward(self, logits, labels):
         '''
-        args: logits: tensor of shape (N, H, W)
-        args: label: tensor of shape(N, H, W)
+        inputs:
+            logits: tensor of shape (N, H, W, ...)
+            label: tensor of shape(N, H, W, ...)
+        output:
+            loss: tensor of shape(1, )
         '''
+        logits = logits.view(1, -1)
+        labels = labels.view(1, -1)
         loss = SoftDiceLossV3Func.apply(logits, labels, self.p, self.smooth)
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        elif self.reduction == 'sum':
-            loss = loss.sum()
         return loss
 
 
@@ -142,7 +142,14 @@ class SoftDiceLossV3Func(torch.autograd.Function):
     @staticmethod
     @amp.custom_fwd
     def forward(ctx, logits, labels, p, smooth):
-        logits = logits.float()
+        '''
+        inputs:
+            logits: (N, L)
+            labels: (N, L)
+        outpus:
+            loss: (N,)
+        '''
+        assert logits.size() == labels.size() and logits.dim() == 2
         loss = soft_dice_cpp.soft_dice_forward(logits, labels, p, smooth)
         ctx.vars = logits, labels, p, smooth
         return loss
@@ -168,7 +175,7 @@ if __name__ == '__main__':
     #  random.seed(15)
     #  np.random.seed(15)
     #  torch.backends.cudnn.deterministic = True
-    torch.cuda.set_device('cuda:1')
+    #  torch.cuda.set_device('cuda:1')
 
     class Model(nn.Module):
         def __init__(self):
@@ -199,12 +206,14 @@ if __name__ == '__main__':
     net2 = Model()
     net2.load_state_dict(net1.state_dict())
 
-    criteria1 = SoftDiceLossV1()
-    criteria2 = SoftDiceLossV3()
+    criteria1 = SoftDiceLossV3()
+    criteria2 = SoftDiceLossV1()
     net1.cuda()
     net2.cuda()
     net1.train()
     net2.train()
+    net1.double()
+    net2.double()
     criteria1.cuda()
     criteria2.cuda()
 
@@ -212,12 +221,15 @@ if __name__ == '__main__':
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
     bs = 12
-    size = 32, 32
+    size = 320, 320
     #  size = 229, 229
-    #  for it in range(300000):
-    for it in range(500):
+    for it in range(300000):
+    #  for it in range(500):
         inten = torch.randn(bs, 3, *size).cuda()
-        lbs = torch.randint(0, 2, (bs, *size)).cuda()
+        lbs = torch.randint(0, 2, (bs, *size)).cuda().float()
+        inten = inten.double()
+        lbs = lbs.double()
+
         logits = net1(inten).squeeze(1)
         loss1 = criteria1(logits, lbs)
         optim1.zero_grad()
