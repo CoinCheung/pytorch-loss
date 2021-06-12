@@ -63,5 +63,13 @@ c10::Half Pow(c10::Half x, c10::Half y) {
     return pow(static_cast<float>(x), static_cast<float>(y));
 }
 
+
+// abs func
+template<typename scalar_t>
+__forceinline__ __device__
+scalar_t Abs(scalar_t x) {
+    return x > scalar_t(0.) ? x : -x;
+}
+
 }
 

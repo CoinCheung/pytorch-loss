@@ -27,16 +27,17 @@ class FocalLossV1(nn.Module):
             >>> lbs = torch.randint(0, 2, (8, 19, 384, 384)).float()
             >>> loss = criteria(logits, lbs)
         '''
-
-        # compute loss
-        #  logits = logits.float() # use fp32 if logits is fp16
-        with torch.no_grad():
-            alpha = self.alpha * label + (1. - self.alpha) * (1. - label)
-
         probs = torch.sigmoid(logits)
-        pt = label * probs + (1. - label) * (1. - probs)
-        ce_loss = self.crit(logits, label)
-        loss = (alpha * torch.pow(1 - pt, self.gamma) * ce_loss)
+        coeff = torch.abs(label - probs).pow(self.gamma).neg()
+        log_probs = torch.where(logits >= 0,
+                F.softplus(logits, -1, 50),
+                logits - F.softplus(logits, 1, 50))
+        log_1_probs = torch.where(logits >= 0,
+                -logits + F.softplus(logits, -1, 50),
+                -F.softplus(logits, 1, 50))
+        loss = label * self.alpha * log_probs + (1. - label) * (1. - self.alpha) * log_1_probs
+        loss = loss * coeff
+
         if self.reduction == 'mean':
             loss = loss.mean()
         if self.reduction == 'sum':
@@ -51,29 +52,25 @@ class FocalSigmoidLossFuncV2(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
-    #  @amp.custom_fwd(cast_inputs=torch.float32)
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, label, alpha, gamma):
         #  logits = logits.float()
-        coeff = label * alpha + (1. - label) * (1. - alpha)
 
         probs = torch.sigmoid(logits)
+        coeff = (label - probs).abs_().pow_(gamma).neg_()
         log_probs = torch.where(logits >= 0,
                 F.softplus(logits, -1, 50),
                 logits - F.softplus(logits, 1, 50))
         log_1_probs = torch.where(logits >= 0,
                 -logits + F.softplus(logits, -1, 50),
                 -F.softplus(logits, 1, 50))
-        probs_gamma = probs ** gamma
-        probs_1_gamma = (1. - probs) ** gamma
+        ce_term1 = log_probs.mul_(label).mul_(alpha)
+        ce_term2 = log_1_probs.mul_(1. - label).mul_(1. - alpha)
+        ce = ce_term1.add_(ce_term2)
+        loss = ce * coeff
 
-        ctx.vars = (coeff, probs, log_probs, log_1_probs, probs_gamma,
-                probs_1_gamma, label, gamma)
+        ctx.vars = (coeff, probs, ce, label, gamma, alpha)
 
-        term1 = probs_1_gamma * log_probs
-        term2 = probs_gamma * log_1_probs
-        loss = label * term1 + (1. - label) * term2
-        loss = loss.mul_(coeff).neg_()
         return loss
 
     @staticmethod
@@ -82,14 +79,20 @@ class FocalSigmoidLossFuncV2(torch.autograd.Function):
         '''
         compute gradient of focal loss
         '''
-        (coeff, probs, log_probs, log_1_probs, probs_gamma,
-                probs_1_gamma, label, gamma) = ctx.vars
+        (coeff, probs, ce, label, gamma, alpha) = ctx.vars
 
-        term1 = (1. - probs - gamma * probs * log_probs).mul_(probs_1_gamma).neg_()
-        term2 = (probs - gamma * (1. - probs) * log_1_probs).mul_(probs_gamma)
+        d_coeff = (label - probs).abs_().pow_(gamma - 1.).mul_(gamma)
+        d_coeff.mul_(probs).mul_(1. - probs)
+        d_coeff = torch.where(label < probs, d_coeff.neg(), d_coeff)
+        term1 = d_coeff.mul_(ce)
 
-        grads = label * term1 + (1. - label) * term2
-        grads = grads.mul_(coeff).mul_(grad_output)
+        d_ce = label * alpha
+        d_ce.sub_(probs.mul_((label * alpha).mul_(2).add_(1).sub_(label).sub_(alpha)))
+        term2 = d_ce.mul(coeff)
+
+        grads = term1.add_(term2)
+        grads.mul_(grad_output)
+
         return grads, None, None, None
 
 
@@ -128,7 +131,7 @@ class FocalSigmoidLossFuncV3(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, alpha, gamma):
         #  logits = logits.float()
         loss = focal_cpp.focalloss_forward(logits, labels, gamma, alpha)
@@ -175,6 +178,9 @@ class FocalLossV3(nn.Module):
         return loss
 
 
+
+
+
 if __name__ == '__main__':
     import torchvision
     import torch
@@ -214,7 +220,7 @@ if __name__ == '__main__':
     net2 = Model()
     net2.load_state_dict(net1.state_dict())
 
-    criteria1 = FocalLossV1()
+    criteria1 = FocalLossV2()
     criteria2 = FocalLossV3()
     net1.cuda()
     net2.cuda()
@@ -231,7 +237,8 @@ if __name__ == '__main__':
     bs = 16
     for it in range(300000):
         inten = torch.randn(bs, 3, 224, 244).cuda()
-        lbs = torch.randint(0, 2, (bs, 3, 224, 244)).float().cuda()
+        #  lbs = torch.randint(0, 2, (bs, 3, 224, 244)).float().cuda()
+        lbs = torch.randn(bs, 3, 224, 244).sigmoid().cuda()
         inten = inten.double()
         lbs = lbs.double()
         logits = net1(inten)

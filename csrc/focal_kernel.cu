@@ -17,6 +17,7 @@ using math_ops::Exp;
 using math_ops::Log;
 using math_ops::Log1p;
 using math_ops::Pow;
+using math_ops::Abs;
 
 
 
@@ -30,6 +31,7 @@ __global__ void FocalLossForward(const int nthreads,
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
     const scalar_t one(1.);
+    const scalar_t zero(0.);
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t lgt = logits[i];
         scalar_t lb = labels[i];
@@ -44,9 +46,9 @@ __global__ void FocalLossForward(const int nthreads,
             log_1_p = -Log1p(Exp(lgt));
             log_p = lgt + log_1_p;
         }
-        scalar_t term1 = Pow(one - prob, gamma) * log_p;
-        scalar_t term2 = Pow(prob, gamma) * log_1_p;
-        loss[i] = -alpha * term1 * lb - (one - alpha) * term2 * (one - lb);
+        scalar_t coeff = - Pow(Abs(lb - prob), gamma);
+        scalar_t ce = lb * alpha * log_p + (one - lb) * (one - alpha) * log_1_p;
+        loss[i] = coeff * ce;
     }
 }
 
@@ -75,9 +77,17 @@ __global__ void FocalLossBackward(const int nthreads,
             log_1_p = -Log1p(Exp(lgt));
             log_p = lgt + log_1_p;
         }
-        scalar_t term1 = Pow(one - prob, gamma) * (one - prob - gamma * prob * log_p);
-        scalar_t term2 = Pow(prob, gamma) * (gamma * (one - prob) * log_1_p - prob);
-        grad_logits[i] = (-alpha * term1 * lb - (one - alpha) * term2 * (one - lb)) * grad_loss[i];
+        scalar_t ce = lb * alpha * log_p + (one - lb) * (one - alpha) * log_1_p;
+        scalar_t coeff = - Pow(Abs(lb - prob), gamma);
+        scalar_t d_ce = lb * alpha - prob * (one - lb - alpha + 2 * lb * alpha);
+        scalar_t d_coeff = gamma * Pow(Abs(lb - prob), gamma - one) * prob * (one - prob);
+        if (lb < prob) {
+            d_coeff = - d_coeff;
+        }
+
+        scalar_t grad = d_coeff * ce + d_ce * coeff;
+
+        grad_logits[i] = grad * grad_loss[i];
     }
 }
 
