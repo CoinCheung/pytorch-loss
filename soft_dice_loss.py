@@ -70,7 +70,7 @@ class SoftDiceLossV2Func(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, p, smooth):
         '''
         inputs:
@@ -140,7 +140,7 @@ class SoftDiceLossV3Func(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, labels, p, smooth):
         '''
         inputs:

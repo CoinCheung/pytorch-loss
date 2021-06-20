@@ -38,17 +38,19 @@ class Model(nn.Module):
         feat = self.layer3(feat)
         feat = self.layer4(feat)
         feat = self.fc(feat)
-        out = F.interpolate(feat, x.size()[2:], mode='bilinear', align_corners=True)
+        #  out = F.interpolate(feat, x.size()[2:], mode='bilinear', align_corners=True)
+        out = torch.mean(feat, dim=(2, 3))
         return out
 
-c = 57
+c = 2
 net1 = Model(c)
 #  net2 = Model()
 #  net2.load_state_dict(net1.state_dict())
 red = 'mean'
 #  criteria1 = LovaszSoftmaxV1(reduction='sum', ignore_index=255)
-criteria1 = LovaszSoftmaxV3(reduction='sum', ignore_index=255)
-#  criteria1 = LabelSmoothSoftmaxCEV3(reduction='sum', ignore_index=255)
+#  criteria1 = LovaszSoftmaxV3(reduction='sum', ignore_index=255)
+criteria1 = LabelSmoothSoftmaxCEV3(reduction='sum', ignore_index=255)
+print(criteria1)
 
 net1.cuda()
 #  net2.cuda()
@@ -64,10 +66,11 @@ optim1 = torch.optim.SGD(net1.parameters(), lr=1e-2)
 bs, h, w = 2, 1000, 1000
 for it in range(1000):
     inten = torch.randn(bs, 3, h, w).cuda()#.half()
-    lbs = torch.randint(0, c, (bs, h, w)).cuda()
-    lbs[1, 1, 1] = 255
-    lbs[0, 3:100, 2:100] = 255
-    lbs[1, 4:70, 28:200] = 255
+    #  lbs = torch.randint(0, c, (bs, h, w)).cuda()
+    lbs = torch.randint(0, c, (bs, )).cuda()
+    #  lbs[1, 1, 1] = 255
+    #  lbs[0, 3:100, 2:100] = 255
+    #  lbs[1, 4:70, 28:200] = 255
     logits1 = net1(inten)
     logits1.retain_grad()
     loss1 = criteria1(logits1, lbs)

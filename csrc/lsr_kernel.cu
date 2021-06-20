@@ -209,8 +209,10 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
     }
 
     if (dimsize < 32 && samplesize > 4096) {
+        int blockx = 32;
+        while (blockx < samplesize && blockx < BLOCKSIZE) blockx *= 2;
         int gridx = std::max(std::min(4096, samplesize / BLOCKSIZE), 1);
-        dim3 block(BLOCKSIZE);
+        dim3 block(blockx);
         dim3 grid(gridx);
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(losses.scalar_type(), "lsr forward", [&] {
             int shm_size = BLOCKSIZE * sizeof(scalar_t); 
@@ -227,7 +229,7 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
         while (blockx < dimsize) blockx *= 2;
         blockx = std::max(std::min((int)BLOCKSIZE, blockx / 2), (int)32);
         int blocky = std::min(samplesize, (int)(BLOCKSIZE / blockx));
-        int gridx = std::min(4096, (int)(samplesize / blocky));
+        int gridx = std::max(1, std::min(4096, (int)(samplesize / blocky)));
         int n_shm = blockx * blocky;
         dim3 block(blockx, blocky);
         dim3 grid(gridx);
@@ -270,8 +272,10 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
         return grad_logits;
     }
 
-    dim3 block(BLOCKSIZE);
-    int gridx = std::min(log_size / BLOCKSIZE, (int)4096);
+    int blockx = 32;
+    while (blockx < log_size && blockx < BLOCKSIZE) blockx *= 2;
+    dim3 block(blockx);
+    int gridx = std::max(std::min(log_size / BLOCKSIZE, (int)4096), 1);
     dim3 grid(gridx);
 
     // call kernel
