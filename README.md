@@ -41,6 +41,7 @@ from pytorch_loss import TaylorCrossEntropyLossV1, TaylorCrossEntropyLossV3
 
 from pytorch_loss import TaylorSoftmaxV1, TaylorSoftmaxV3
 from pytorch_loss import LogTaylorSoftmaxV1, LogTaylorSoftmaxV3
+from pytorch_loss import InfoNceDist
 
 from pytorch_loss import CoordConv2d, DY_Conv2d
 ```

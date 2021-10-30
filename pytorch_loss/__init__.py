@@ -21,3 +21,4 @@ from .ohem_loss import OhemCELoss, OhemLargeMarginLoss
 from .conv_ops import CoordConv2d, DY_Conv2d
 from .lovasz_softmax import LovaszSoftmaxV1, LovaszSoftmaxV3
 from .taylor_softmax import TaylorSoftmaxV1, TaylorSoftmaxV3, LogTaylorSoftmaxV1, LogTaylorSoftmaxV3, TaylorCrossEntropyLossV1, TaylorCrossEntropyLossV3
+from .info_nce_dist import InfoNceDist
