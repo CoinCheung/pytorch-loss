@@ -1,6 +1,6 @@
 # pytorch-loss
 
-My implementation of label-smooth, amsoftmax, focal-loss, dual-focal-loss, triplet-loss, giou-loss, affinity-loss, pc_softmax_cross_entropy, ohem-loss(softmax based on line hard mining loss), large-margin-softmax(bmvc2019), lovasz-softmax-loss, and dice-loss(both generalized soft dice loss and batch soft dice loss). Maybe this is useful in my future work.
+My implementation of label-smooth, amsoftmax, partial-fc, focal-loss, dual-focal-loss, triplet-loss, giou-loss, affinity-loss, pc_softmax_cross_entropy, ohem-loss(softmax based on line hard mining loss), large-margin-softmax(bmvc2019), lovasz-softmax-loss, and dice-loss(both generalized soft dice loss and batch soft dice loss). Maybe this is useful in my future work.
 
 
 Also tried to implement swish, hard-swish(hswish) and mish activation functions.
@@ -38,10 +38,11 @@ from pytorch_loss import AffinityFieldLoss, AffinityLoss
 from pytorch_loss import OhemCELoss, OhemLargeMarginLoss
 from pytorch_loss import LovaszSoftmaxV1, LovaszSoftmaxV3
 from pytorch_loss import TaylorCrossEntropyLossV1, TaylorCrossEntropyLossV3
+from pytorch_loss import InfoNceDist
+from pytorch_loss import PartialFCAMSoftmax
 
 from pytorch_loss import TaylorSoftmaxV1, TaylorSoftmaxV3
 from pytorch_loss import LogTaylorSoftmaxV1, LogTaylorSoftmaxV3
-from pytorch_loss import InfoNceDist
 
 from pytorch_loss import CoordConv2d, DY_Conv2d
 ```
