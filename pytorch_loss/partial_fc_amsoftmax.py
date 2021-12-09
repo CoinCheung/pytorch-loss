@@ -47,7 +47,7 @@ class PartialFCAMSoftmax(nn.Module):
         world_size = dist.get_world_size()
 
         assert n_ids % world_size == 0, "number of ids should be divisible among gpus. please drop some ids, which should make trivial differences"
-        self.n_ids = n_ids // world_size
+        self.n_ids = int(n_ids / world_size)
         self.emb_dim = emb_dim
 
         assert ratio > 0. and ratio <= 1., "sample ratio should be in (0., 1.]"
@@ -69,7 +69,8 @@ class PartialFCAMSoftmax(nn.Module):
             rank = dist.get_rank()
             world_size = dist.get_world_size()
             W = self.W
-            ind1 = lb // self.n_ids == rank
+            ind1 = lb.div(self.n_ids,
+                    rounding_mode='trunc') == rank
             ind2 = lb[ind1] % self.n_ids
             n_pos = ind1.sum()
 
@@ -111,7 +112,7 @@ class GatherFunction(torch.autograd.Function):
     def backward(ctx, grad_all_embs, grad_all_lbs):
         world_size = dist.get_world_size()
         rank = dist.get_rank()
-        N = grad_all_embs.size(0) // world_size
+        N = int(grad_all_embs.size(0) / world_size)
         grads_embs = grad_all_embs[rank * N: (rank + 1) * N]
         return grads_embs, None
 
@@ -132,13 +133,15 @@ class SampleFunction(torch.autograd.Function):
 
         # id pos and neg
         lb_unq = lb.unique(sorted=True)
-        pos_ind1 = lb_unq // n_ids == rank
+        pos_ind1 = lb_unq.div(n_ids,
+                rounding_mode='trunc') == rank
         pos_ind2 = lb_unq[pos_ind1] % n_ids
         id_n_pos = pos_ind1.sum()
         id_n_neg = max(0, n_sample - id_n_pos)
 
         # label pos and neg
-        ind1 = lb // n_ids == rank
+        ind1 = lb.div(n_ids,
+                rounding_mode='trunc') == rank
         ind2 = lb[ind1] % n_ids
         n_pos = ind1.sum()
 

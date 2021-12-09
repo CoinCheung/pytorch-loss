@@ -40,6 +40,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
+import torch.cuda.amp as amp
 
 
 
@@ -119,7 +120,7 @@ class InfoNceFunction(torch.autograd.Function):
 
         rank = dist.get_rank()
         world_size = dist.get_world_size()
-        N = all_embs.size(0) // (world_size * 2)
+        N = int(all_embs.size(0) / (world_size * 2))
         grad_embs1 = grad_embs12[:N] + grad_all_embs[rank * N : (rank + 1) * N]
         grad_embs2 = grad_embs12[N:] + grad_all_embs[(rank + world_size) * N : (rank + world_size + 1) * N]
 
