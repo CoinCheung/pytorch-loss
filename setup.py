@@ -40,6 +40,9 @@ setup(
         cpp_extension.CUDAExtension(
             'taylor_softmax_cpp',
             ['csrc/taylor_softmax.cu']),
+        cpp_extension.CUDAExtension(
+            'layer_norm_cpp',
+            ['csrc/layer_norm.cu']),
     ],
     cmdclass={'build_ext': cpp_extension.BuildExtension},
     packages=find_packages()

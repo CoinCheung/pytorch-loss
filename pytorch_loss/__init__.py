@@ -23,3 +23,5 @@ from .lovasz_softmax import LovaszSoftmaxV1, LovaszSoftmaxV3
 from .taylor_softmax import TaylorSoftmaxV1, TaylorSoftmaxV3, LogTaylorSoftmaxV1, LogTaylorSoftmaxV3, TaylorCrossEntropyLossV1, TaylorCrossEntropyLossV3
 from .info_nce_dist import InfoNceDist
 from .partial_fc_amsoftmax import PartialFCAMSoftmax
+
+from .layer_norm import LayerNormV1, LayerNormV2, LayerNormV3

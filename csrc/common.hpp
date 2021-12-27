@@ -63,6 +63,32 @@ c10::Half Pow(c10::Half x, c10::Half y) {
     return pow(static_cast<float>(x), static_cast<float>(y));
 }
 
+// sqrt
+template<typename scalar_t>
+__forceinline__ __device__
+scalar_t Sqrt(scalar_t x) {
+    return sqrt(x);
+}
+
+template<>
+__forceinline__ __device__
+c10::Half Sqrt(c10::Half x) {
+    return sqrtf(static_cast<float>(x));
+}
+
+// rsqrt
+template<typename scalar_t>
+__forceinline__ __device__
+scalar_t Rsqrt(scalar_t x) {
+    return rsqrt(x);
+}
+
+template<>
+__forceinline__ __device__
+c10::Half Rsqrt(c10::Half x) {
+    return rsqrtf(static_cast<float>(x));
+}
+
 
 // abs func
 template<typename scalar_t>
