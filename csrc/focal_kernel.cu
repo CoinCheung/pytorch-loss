@@ -37,7 +37,7 @@ __global__ void FocalLossForward(const int nthreads,
         scalar_t lb = labels[i];
         scalar_t prob = one / (one + Exp(-lgt));
         scalar_t log_p, log_1_p;
-        if (lgt >= 0) {
+        if (lgt >= zero) {
             // log_p = -Log(one + Exp(-lgt));
             log_p = -Log1p(Exp(-lgt));
             log_1_p = -lgt + log_p;
@@ -63,12 +63,13 @@ __global__ void FocalLossBackward(const int nthreads,
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;
     const scalar_t one(1.);
+    const scalar_t zero(0.);
     for (int i{tid}; i < nthreads; i+=stride) {
         scalar_t lgt = logits[i];
         scalar_t lb = labels[i];
         scalar_t prob = one / (one + Exp(-lgt));
         scalar_t log_p, log_1_p;
-        if (lgt >= 0) {
+        if (lgt >= zero) {
             // log_p = -Log(one + Exp(-lgt));
             log_p = -Log1p(Exp(-lgt));
             log_1_p = -lgt + log_p;

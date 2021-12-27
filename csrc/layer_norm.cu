@@ -65,6 +65,7 @@ __global__ void LayerNormForward(const int N,
     int n_samples = N * M;
     const scalar_t zero(0.);
     const scalar_t two(2.);
+    const scalar_t scale = scalar_t(1./C);
 
     for (int i{bid}; i < n_samples; i += bstrd) {
         int n = i / M;
@@ -80,7 +81,7 @@ __global__ void LayerNormForward(const int N,
                 sdata,
                 blockDim.x,
                 layer_norm_space::sum_op<scalar_t>());
-        scalar_t sum_x = sdata[0];
+        scalar_t sum_x = sdata[0]; 
         __syncthreads();
 
         sdata[tid] = zero;
@@ -96,12 +97,12 @@ __global__ void LayerNormForward(const int N,
         scalar_t sum_x2 = sdata[0];
         __syncthreads();
 
-        // var = 1/c * (sum(x**2) - 1/c * sum(x) ** 2)
-        sum_x2 = (sum_x2 - scalar_t(1./C) * Pow(sum_x, two)) / scalar_t(C);
+        // mean = sum(x) / C
+        sum_x = sum_x * scale;
+        // var = 1/c * sum(x**2) - mean(x) ** 2)
+        sum_x2 = sum_x2 * scale - sum_x * sum_x;
         // 1/std = rsqrt(var + eps)
         sum_x2 = Rsqrt(sum_x2 + scalar_t(eps));
-        // mean = sum(x) / C
-        sum_x = sum_x / scalar_t(C);
         // res = (x - mean) / std
         for (int j{tid}; j < C; j += blockDim.x) {
             res[n * C * M + j * M + m] = (x[n * C * M + j * M + m] - sum_x) * sum_x2;
@@ -118,7 +119,7 @@ __global__ void SpatialLayerNormForward(const int N,
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int strd = gridDim.x * blockDim.x;
     int n_samples = N * M;
-    const scalar_t two(2.);
+    const scalar_t scale = scalar_t(1./C);
 
     for (int i{tid}; i < n_samples; i += strd) {
         int n = i / M;
@@ -128,15 +129,16 @@ __global__ void SpatialLayerNormForward(const int N,
         for (int j{0}; j < C; ++j) {
             scalar_t val = x[n * C * M + j * M + m];
             sum_x += val;
-            sum_x2 += Pow(val, two);
+            // sum_x2 += Pow(val, two);
+            sum_x2 += val * val;
         }
 
+        // mean = sum(x) / C
+        sum_x = sum_x * scale;
         // var = 1/c * (sum(x**2) - 1/c * sum(x) ** 2)
-        sum_x2 = (sum_x2 - scalar_t(1./C) * Pow(sum_x, two)) / scalar_t(C);
+        sum_x2 = sum_x2 * scale - sum_x * sum_x;
         // 1/std = rsqrt(var + eps)
         sum_x2 = Rsqrt(sum_x2 + scalar_t(eps));
-        // mean = sum(x) / C
-        sum_x = sum_x / scalar_t(C);
         // res = (x - mean) / std
         for (int j{0}; j < C; ++j) {
             int ind = n * C * M + j * M + m;
@@ -161,8 +163,8 @@ __global__ void LayerNormBackward(const int N,
     int bstrd = gridDim.x * blockDim.y;
     int n_samples = N * M;
     const scalar_t zero(0.);
-    const scalar_t one(1.);
-    const scalar_t two(2.);
+    const scalar_t scale = scalar_t(1./C);
+    // const float scale = 1./C;
 
     for (int i{bid}; i < n_samples; i += bstrd) {
         int n = i / M;
@@ -178,29 +180,38 @@ __global__ void LayerNormBackward(const int N,
                 sdata,
                 blockDim.x,
                 layer_norm_space::sum_op<scalar_t>());
-        scalar_t sum_x = sdata[0];
+        // float sum_x = static_cast<float>(sdata[0]);
+        scalar_t sum_x = sdata[0]; 
         __syncthreads();
 
         sdata[tid] = zero;
         __syncthreads();
         for (int j{tid}; j < C; j += blockDim.x) {
-            sdata[tid] += Pow(x[n * C * M + j * M + m], two);
+            sdata[tid] += x[n * C * M + j * M + m] * x[n * C * M + j * M + m];
         }
         __syncthreads();
         layer_norm_space::reduce_op<layer_norm_space::sum_op, scalar_t>(
                 sdata,
                 blockDim.x,
                 layer_norm_space::sum_op<scalar_t>());
-        scalar_t sum_x2 = sdata[0];
+        // float sum_x2 = static_cast<float>(sdata[0]);
+        scalar_t sum_x2 = sdata[0]; 
         __syncthreads();
 
-        // var + eps = 1/c * (sum(x**2) - 1/c * sum(x) ** 2) + eps
-        sum_x2 = (sum_x2 - scalar_t(1./C) * Pow(sum_x, two)) / scalar_t(C) + scalar_t(eps);
+        // mean = sum(x) / C
+        sum_x = sum_x * scale;
+        // var + eps = 1/c * sum(x**2) - mean(x) ** 2) + eps
+        sum_x2 = sum_x2 * scale - sum_x * sum_x + scalar_t(eps);
+        // sum_x2 = sum_x2 * scale - sum_x * sum_x + static_cast<float>(eps);
 
         for (int j{tid}; j < C; j += blockDim.x) {
             scalar_t val = x[n * C * M + j * M + m];
-            // rsqrt(var + eps) * (-1/C) * (1 + (xi - mean) * (xi - 1/C) * sum(x) * (var + eps))
-            res[n * C * M + j * M + m] = -Rsqrt(sum_x2) * scalar_t(1./C) * (one + (val - sum_x / scalar_t(C)) * (val - scalar_t(1./C) * sum_x * sum_x2)) * grad[n * C * M + j * M + m];
+            // - rsqrt(var + eps) * (1/C + (xi - mean) * (xi - 1/C) * mean(x) * (var + eps))
+            res[n * C * M + j * M + m] = -Rsqrt(sum_x2) * (scale + (val - sum_x) * (val - scale) * sum_x * sum_x2) * grad[n * C * M + j * M + m];
+
+            // float val = static_cast<float>(x[n * C * M + j * M + m]);
+            // float g = -Rsqrt(sum_x2) * (scale + (val - sum_x) * (val - scale) * sum_x * sum_x2);
+            // res[n * C * M + j * M + m] = scalar_t(g * grad[n * C * M + j * M + m]);
         }
     }
 }
@@ -215,7 +226,7 @@ __global__ void SpatialLayerNormBackward(const int N,
     int strd = gridDim.x * blockDim.x;
     int n_samples = N * M;
     const scalar_t one(1.);
-    const scalar_t two(2.);
+    const scalar_t scale = scalar_t(1./C);
 
     for (int i{tid}; i < n_samples; i += strd) {
         int n = i / M;
@@ -225,17 +236,24 @@ __global__ void SpatialLayerNormBackward(const int N,
         for (int j{0}; j < C; ++j) {
             scalar_t val = x[n * C * M + j * M + m];
             sum_x += val;
-            sum_x2 += Pow(val, two);
+            sum_x2 += val * val;
         }
 
+        // mean
+        sum_x = sum_x * scale;
+        // var + eps = 1/c * sum(x**2) - mean(x) ** 2) + eps
+        sum_x2 = sum_x2 * scale - sum_x * sum_x + scalar_t(eps);
         // var + eps = 1/c * (sum(x**2) - 1/c * sum(x) ** 2) + eps
-        sum_x2 = (sum_x2 - scalar_t(1./C) * Pow(sum_x, two)) / scalar_t(C) + scalar_t(eps);
+        // sum_x2 = (sum_x2 - scalar_t(1./C) * Pow(sum_x, two)) / scalar_t(C) + scalar_t(eps);
 
         for (int j{0}; j < C; ++j) {
             int ind = n * C * M + j * M + m;
             scalar_t val = x[ind];
             // rsqrt(var + eps) * (-1/C) * (1 + (xi - mean) * (xi - 1/C) * sum(x) * (var + eps))
-            res[ind] = -Rsqrt(sum_x2) * scalar_t(1./C) * (one + (val - sum_x / scalar_t(C)) * (val - scalar_t(1./C) * sum_x * sum_x2)) * grad[ind];
+            // res[ind] = -Rsqrt(sum_x2) * scalar_t(1./C) * (one + (val - sum_x / scalar_t(C)) * (val - scalar_t(1./C) * sum_x * sum_x2)) * grad[ind];
+
+            // - rsqrt(var + eps) * (1/C + (xi - mean) * (xi - 1/C) * mean(x) * (var + eps))
+            res[ind] = -Rsqrt(sum_x2) * (scale + (val - sum_x) * (val - scale) * sum_x * sum_x2) * grad[ind];
         }
     }
 }

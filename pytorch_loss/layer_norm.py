@@ -3,6 +3,8 @@
 
 '''
 LayerNorm working in same way as pytorch native implementation, but usage is more similar to nn.BatchNorm. I write this for better support of visual transformers.
+Sadly, the cuda implementation is just on-par with a combination of pytorch native operators in terms of speed and memory usage (speed is faster but not noticeable). Maybe LayerNorm is not the bottleneck of my model, and I should not waste my time writing cuda code here. pytorch native operators are good enough here.
+The cuda kernel and V2 version has the problem of nan during backward pass in float16 mode(not always nan, only when input values are very big which causes sum(x**2) to be out of range of a fp16 number), thus I simply cast the input into float32 when input is float16.
 '''
 
 import torch
@@ -60,9 +62,10 @@ class LayerNormV2(nn.Module):
         '''
         N, C, H, W = x.size()
         x = x.view(N, C, -1)
-        x = LayerNormV2Func.apply(x, self.eps)
-        if self.affine:
-            x = self.weight * x + self.bias
+        dt = x.dtype
+        if dt == torch.float16: x = x.float()
+        x = LayerNormV2Func.apply(x, self.eps).to(dt)
+        if self.affine: x = self.weight * x + self.bias
         x = x.view(N, C, H, W)
         return x
 
@@ -122,9 +125,10 @@ class LayerNormV3(nn.Module):
         '''
         N, C, H, W = x.size()
         x = x.view(N, C, -1)
-        x = LayerNormV3Func.apply(x, self.eps)
-        if self.affine:
-            x = self.weight * x + self.bias
+        dt = x.dtype
+        if dt == torch.float16: x = x.float()
+        x = LayerNormV3Func.apply(x, self.eps).to(dt)
+        if self.affine: x = self.weight * x + self.bias
         x = x.view(N, C, H, W)
         return x
 
@@ -184,12 +188,13 @@ if __name__ == '__main__':
             self.out = nn.Conv2d(512, 1, 3, 1, 1)
             self.bn1 = norm(64)
             affine = True
-            self.layer1[1].bn1 = norm(64, affine=affine)
-            self.layer2[0].bn1 = norm(128, affine=affine)
-            self.layer2[1].bn1 = norm(128, affine=affine)
-            self.layer3[1].bn2 = norm(256, affine=affine)
-            self.layer4[0].bn2 = norm(512, affine=affine)
-            self.layer4[1].bn2 = norm(512, affine=affine)
+            eps = 1e-6
+            self.layer1[1].bn1 = norm(64, affine=affine, eps=eps)
+            self.layer2[0].bn1 = norm(128, affine=affine, eps=eps)
+            self.layer2[1].bn1 = norm(128, affine=affine, eps=eps)
+            self.layer3[1].bn2 = norm(256, affine=affine, eps=eps)
+            self.layer4[0].bn2 = norm(512, affine=affine, eps=eps)
+            self.layer4[1].bn2 = norm(512, affine=affine, eps=eps)
         def forward(self, x):
             feat = self.conv1(x)
             feat = self.bn1(feat)
@@ -213,8 +218,10 @@ if __name__ == '__main__':
     net2.cuda()
     net1.train()
     net2.train()
-    #  net1.double()
-    #  net2.double()
+    net1.double()
+    net2.double()
+    #  net1.half()
+    #  net2.half()
     criteria1.cuda()
     criteria2.cuda()
 
@@ -225,7 +232,9 @@ if __name__ == '__main__':
     norm3 = LayerNormV3(256)
     norm1.cuda()
     norm3.cuda()
-    inten = torch.randn(2, 256, 80, 80).cuda()
+    #  inten = torch.randn(2, 256, 80, 80).cuda().half()
+    inten = torch.randn(2, 256, 80, 80).cuda().double()
+    #  inten = torch.randn(2, 256, 80, 80).cuda()
     out1 = norm1(inten)
     out3 = norm3(inten)
     print('diff: ', torch.abs((out1 - out3)).max())
@@ -236,9 +245,11 @@ if __name__ == '__main__':
     bs = 12
     size = 640, 640
     #  size = 229, 229
-    for it in range(100):
-    #  for it in range(500):
-        inten = torch.randn(bs, 3, *size).cuda()
+    for it in range(10):
+        #  inten = torch.randn(bs, 3, *size).cuda().half()
+        inten = torch.randn(bs, 3, *size).cuda().double()
+        #  inten = torch.randn(bs, 3, *size).cuda()
+        inten[0][0][0] = 444.
         lbs = torch.randint(0, 1, (bs, *size)).cuda()
         #  inten = inten.double()
         lbs = lbs
