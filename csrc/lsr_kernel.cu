@@ -12,6 +12,7 @@
 #include <cfloat>
 
 #include <iostream>
+#include "common.hpp"
 
 using std::cout;
 using std::endl;

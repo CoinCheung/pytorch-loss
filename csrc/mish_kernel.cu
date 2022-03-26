@@ -10,6 +10,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cfloat>
+#include "common.hpp"
 
 
 #define EXP_THRESH 20.

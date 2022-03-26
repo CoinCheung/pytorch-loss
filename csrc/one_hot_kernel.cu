@@ -15,6 +15,7 @@
 
 #include <iostream>
 #include <vector>
+#include "common.hpp"
 
 using std::cout;
 using std::endl;

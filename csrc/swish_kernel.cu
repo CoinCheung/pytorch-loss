@@ -11,6 +11,7 @@
 #include <cuda_runtime.h>
 #include <cfloat>
 
+#include "common.hpp"
 
 #define BLOCKSIZE 512
 
