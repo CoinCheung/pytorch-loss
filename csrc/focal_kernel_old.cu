@@ -95,7 +95,7 @@ at::Tensor FocalLoss_forward_cuda(const at::Tensor &logits,
     ));
     dim3 block(512);
     if (losses.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return losses;
     }
 
@@ -109,7 +109,7 @@ at::Tensor FocalLoss_forward_cuda(const at::Tensor &logits,
             scalar_t(gamma), scalar_t(alpha)
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return losses;
 }
 
@@ -131,7 +131,7 @@ at::Tensor FocalLoss_backward_cuda(const at::Tensor &grad,
     ));
     dim3 block(512);
     if (grad_logits.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return grad_logits;
     }
 
@@ -146,7 +146,7 @@ at::Tensor FocalLoss_backward_cuda(const at::Tensor &grad,
             scalar_t(gamma), scalar_t(alpha)
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_logits;
 }
 

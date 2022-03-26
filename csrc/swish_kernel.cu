@@ -109,7 +109,7 @@ at::Tensor Swish_forward_cuda(const at::Tensor &feat) {
     ));
     dim3 block(BLOCKSIZE);
     if (activations.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return activations;
     }
 
@@ -121,7 +121,7 @@ at::Tensor Swish_forward_cuda(const at::Tensor &feat) {
             activations.contiguous().data_ptr<scalar_t>()
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return activations;
 }
 
@@ -141,7 +141,7 @@ at::Tensor Swish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
     ));
     dim3 block(BLOCKSIZE);
     if (grad_feat.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return grad_feat;
     }
 
@@ -154,7 +154,7 @@ at::Tensor Swish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
             grad_feat.contiguous().data_ptr<scalar_t>()
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_feat;
 }
 
@@ -172,7 +172,7 @@ at::Tensor HSwish_forward_cuda(const at::Tensor &feat) {
     ));
     dim3 block(BLOCKSIZE);
     if (activations.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return activations;
     }
 
@@ -184,7 +184,7 @@ at::Tensor HSwish_forward_cuda(const at::Tensor &feat) {
             activations.contiguous().data_ptr<scalar_t>()
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return activations;
 }
 
@@ -203,7 +203,7 @@ at::Tensor HSwish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) 
     ));
     dim3 block(BLOCKSIZE);
     if (grad_feat.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return grad_feat;
     }
 
@@ -216,7 +216,7 @@ at::Tensor HSwish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) 
             grad_feat.contiguous().data_ptr<scalar_t>()
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_feat;
 }
 

@@ -188,7 +188,7 @@ at::Tensor Score_ohem_label_cuda(const at::Tensor &logits,
     auto scores = torch::empty_like(labels, logits.options());
     thrust::device_vector<int> idx(samplesize);
     if (ohem_label.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return ohem_label;
     }
 
@@ -257,7 +257,7 @@ at::Tensor Score_ohem_label_cuda(const at::Tensor &logits,
             ignore_index, score_thresh, n_min
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return ohem_label;
 }
 

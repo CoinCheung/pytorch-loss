@@ -204,7 +204,7 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
     auto losses = torch::zeros_like(labels, logits.options());
     auto log_scores = torch::log_softmax(logits, 1);
     if (losses.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return losses;
     }
 
@@ -247,7 +247,7 @@ at::Tensor LSR_forward_cuda(const at::Tensor &logits,
         });
     }
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return losses;
 }
 
@@ -268,7 +268,7 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
     // allocate memory and cuda grid/block
     auto grad_logits = torch::softmax(logits, 1);
     if (grad_logits.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return grad_logits;
     }
 
@@ -287,7 +287,7 @@ at::Tensor LSR_backward_cuda(const at::Tensor &logits,
             ignore_index, smooth
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_logits;
 }
 

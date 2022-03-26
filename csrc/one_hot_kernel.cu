@@ -329,7 +329,7 @@ at::Tensor Label_one_hot_cuda(const at::Tensor &labels,
         );
     }
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return one_hot;
 }
 

@@ -411,7 +411,7 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
     // allocate memory and cuda grid/block
     auto losses = torch::empty_like(labels, logits.options());
     if (losses.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return losses;
     }
 
@@ -452,7 +452,7 @@ at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
         });
     }
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return losses;
 }
 
@@ -473,7 +473,7 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
     // allocate memory and cuda grid/block
     auto grad_logits = torch::empty_like(logits);
     if (grad_logits.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return grad_logits;
     }
 
@@ -513,7 +513,7 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
             );
         });
     }
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_logits;
 }
 

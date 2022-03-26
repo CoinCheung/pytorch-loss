@@ -300,7 +300,7 @@ at::Tensor SoftDice_forward_cuda(const at::Tensor &logits,
             {batchsize * n_blockxs_sample}, 
             logits.options());
     if (losses.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return losses;
     }
     // call kernel
@@ -324,7 +324,7 @@ at::Tensor SoftDice_forward_cuda(const at::Tensor &logits,
             smooth
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return losses;
 }
 
@@ -403,7 +403,7 @@ at::Tensor SoftDice_backward_cuda(const at::Tensor &grad,
             p
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_logits;
 }
 

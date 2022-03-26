@@ -67,7 +67,7 @@ at::Tensor Mish_forward_cuda(const at::Tensor &feat) {
     ));
     dim3 block(512);
     if (activations.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return activations;
     }
 
@@ -79,7 +79,7 @@ at::Tensor Mish_forward_cuda(const at::Tensor &feat) {
             activations.contiguous().data_ptr<scalar_t>()
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return activations;
 }
 
@@ -97,7 +97,7 @@ at::Tensor Mish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
     ));
     dim3 block(512);
     if (grad_feat.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return grad_feat;
     }
 
@@ -110,7 +110,7 @@ at::Tensor Mish_backward_cuda(const at::Tensor &grad, const at::Tensor &feat) {
             grad_feat.contiguous().data_ptr<scalar_t>()
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_feat;
 }
 

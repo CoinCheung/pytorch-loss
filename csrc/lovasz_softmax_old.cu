@@ -562,7 +562,7 @@ std::tuple<at::Tensor, at::Tensor> Lovasz_softmax_forward_cuda(const at::Tensor 
     auto errs = at::empty_like(logits).reshape({dimsize, -1});
     auto jacc = at::zeros_like(logits).reshape({dimsize, -1});
     if (errs.numel() == 0 | jacc.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return std::make_tuple(errs, jacc);
     }
 
@@ -585,7 +585,7 @@ std::tuple<at::Tensor, at::Tensor> Lovasz_softmax_forward_cuda(const at::Tensor 
     // TODO: define the loss tensor outsize, and pass it as an arg of the function
     auto loss = LovaszComputeLoss(errs, jacc);
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return std::make_tuple(loss, jacc);
 }
 
@@ -648,7 +648,7 @@ at::Tensor Lovasz_softmax_backward_cuda(const at::Tensor &grad, const at::Tensor
     });
 
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_logits;
 }
 

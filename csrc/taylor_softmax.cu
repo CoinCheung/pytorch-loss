@@ -387,7 +387,7 @@ at::Tensor TaylorSoftmax_backward_cuda(const at::Tensor &grad,
         });
     }
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_feat;
 }
 

@@ -307,7 +307,7 @@ at::Tensor LayerNorm_forward_cuda(const at::Tensor &x,
         });
     }
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return res;
 }
 
@@ -363,7 +363,7 @@ at::Tensor LayerNorm_backward_cuda(const at::Tensor &grad,
         });
     }
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return res;
 }
 
