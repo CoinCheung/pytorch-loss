@@ -3,7 +3,7 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include <THC/THC.h>
+
 #include <THC/THCAtomics.cuh>
 #include <THC/THCDeviceUtils.cuh>
 
@@ -12,6 +12,7 @@
 #include <cfloat>
 
 #include <iostream>
+#include "common.hpp"
 
 using std::cout;
 using std::endl;
@@ -154,7 +155,7 @@ at::Tensor SoftDice_forward_cuda(const at::Tensor &logits,
     dim3 grid2(1);
     dim3 block2(BLOCKSIZE);
     if (losses.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return losses;
     }
 
@@ -176,7 +177,7 @@ at::Tensor SoftDice_forward_cuda(const at::Tensor &logits,
             denor.contiguous().data<scalar_t>()
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return losses;
 }
 
@@ -204,7 +205,7 @@ at::Tensor SoftDice_backward_cuda(const at::Tensor &grad,
     ), batchsize);
     dim3 block(BLOCKSIZE);
     if (grad_logits.numel() == 0) {
-        THCudaCheck(cudaGetLastError());
+        AT_CUDA_CHECK(cudaGetLastError());
         return grad_logits;
     }
 
@@ -230,7 +231,7 @@ at::Tensor SoftDice_backward_cuda(const at::Tensor &grad,
             p, smooth
         );
     });
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_logits;
 }
 

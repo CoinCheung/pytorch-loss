@@ -3,7 +3,7 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include <THC/THC.h>
+
 #include <THC/THCAtomics.cuh>
 #include <THC/THCDeviceUtils.cuh>
 
@@ -387,7 +387,7 @@ at::Tensor TaylorSoftmax_backward_cuda(const at::Tensor &grad,
         });
     }
 
-    THCudaCheck(cudaGetLastError());
+    AT_CUDA_CHECK(cudaGetLastError());
     return grad_feat;
 }
 
