@@ -40,7 +40,7 @@ import torch.cuda.amp as amp
 
 class PartialFCAMSoftmax(nn.Module):
 
-    def __init__(self, emb_dim, n_ids=10, m=0.3, s=15, ratio=1.):
+    def __init__(self, emb_dim, n_ids=10, m=0.3, s=15, ratio=1., reduction='mean'):
         super(PartialFCAMSoftmax, self).__init__()
         assert dist.is_initialized(), "must initialize distributed before create this"
         rank = dist.get_rank()
@@ -56,6 +56,8 @@ class PartialFCAMSoftmax(nn.Module):
 
         nn.init.xavier_normal_(self.W, gain=1)
 
+        self.reduction = reduction
+
 
     def forward(self, x, lb):
         assert x.size()[0] == lb.size()[0]
@@ -69,8 +71,7 @@ class PartialFCAMSoftmax(nn.Module):
             rank = dist.get_rank()
             world_size = dist.get_world_size()
             W = self.W
-            ind1 = lb.div(self.n_ids,
-                    rounding_mode='trunc') == rank
+            ind1 = lb.div(self.n_ids, rounding_mode='trunc') == rank
             ind2 = lb[ind1] % self.n_ids
             n_pos = ind1.sum()
 
@@ -79,7 +80,12 @@ class PartialFCAMSoftmax(nn.Module):
 
         loss = PartialFCFunction.apply(x_norm, w_norm, ind1, ind2, n_pos, self.s, self.m)
 
-        return loss.mean()
+        if self.reduction == 'mean':
+            loss = loss.mean()
+        elif self.reduction == 'sum':
+            loss = loss.sum()
+
+        return loss
 
 
 class GatherFunction(torch.autograd.Function):
@@ -133,15 +139,13 @@ class SampleFunction(torch.autograd.Function):
 
         # id pos and neg
         lb_unq = lb.unique(sorted=True)
-        pos_ind1 = lb_unq.div(n_ids,
-                rounding_mode='trunc') == rank
+        pos_ind1 = lb_unq.div(n_ids, rounding_mode='trunc') == rank
         pos_ind2 = lb_unq[pos_ind1] % n_ids
         id_n_pos = pos_ind1.sum()
         id_n_neg = max(0, n_sample - id_n_pos)
 
         # label pos and neg
-        ind1 = lb.div(n_ids,
-                rounding_mode='trunc') == rank
+        ind1 = lb.div(n_ids, rounding_mode='trunc') == rank
         ind2 = lb[ind1] % n_ids
         n_pos = ind1.sum()
 
