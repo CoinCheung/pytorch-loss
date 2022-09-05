@@ -11,7 +11,8 @@ from .soft_dice_loss import SoftDiceLossV1, SoftDiceLossV2, SoftDiceLossV3
 from .pc_softmax import PCSoftmaxCrossEntropyV1, PCSoftmaxCrossEntropyV2
 from .large_margin_softmax import LargeMarginSoftmaxV1, LargeMarginSoftmaxV2, LargeMarginSoftmaxV3
 from .label_smooth import LabelSmoothSoftmaxCEV1, LabelSmoothSoftmaxCEV2, LabelSmoothSoftmaxCEV3
-from .generalized_iou_loss import generalized_iou_loss
+from .iou_loss import iou_func, giou_func, diou_func, ciou_func
+from .iou_loss import GIOULoss, DIOULoss, CIOULoss
 from .focal_loss import FocalLossV1, FocalLossV2, FocalLossV3
 from .dual_focal_loss import Dual_Focal_loss
 from .dice_loss import GeneralizedSoftDiceLoss, BatchSoftDiceLoss
