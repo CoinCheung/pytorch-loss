@@ -233,6 +233,7 @@ class PartialFCFunction(torch.autograd.Function):
     @amp.custom_bwd
     def backward(ctx, grad_output):
         softmax, ind1, ind2, n_pos, s, W, all_embs = ctx.vars
+        world_size = dist.get_world_size()
 
         grads = softmax
         if n_pos > 0:
@@ -241,8 +242,11 @@ class PartialFCFunction(torch.autograd.Function):
 
         grads *= s
 
-        # we reduce sum grads of embs, but not W, according to chain rule
-        grads_embs = torch.einsum('ac,bc->ab', grads, W)
+        # we reduce sum grads of embs, but not W, according to chain rule.
+        # since ddp accumulate grads amount gpus with mean rather than sum,
+        # we should let grads_embs behave like grads computed from a loss
+        # with a local average rather than global average
+        grads_embs = torch.einsum('ac,bc->ab', grads, W).mul_(world_size)
         dist.all_reduce(grads_embs, dist.ReduceOp.SUM)
 
         grads_W = torch.einsum('ac,ab->cb', all_embs, grads)
