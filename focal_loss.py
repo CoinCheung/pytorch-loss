@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 
 ##
@@ -52,7 +52,7 @@ class FocalSigmoidLossFuncV2(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
-    @amp.custom_fwd(cast_inputs=torch.float32)
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, logits, label, alpha, gamma):
         #  logits = logits.float()
 
@@ -74,7 +74,7 @@ class FocalSigmoidLossFuncV2(torch.autograd.Function):
         return loss
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         '''
         compute gradient of focal loss
@@ -131,21 +131,43 @@ class FocalSigmoidLossFuncV3(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
-    @amp.custom_fwd(cast_inputs=torch.float32)
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, logits, labels, alpha, gamma):
-        #  logits = logits.float()
         loss = focal_cpp.focalloss_forward(logits, labels, gamma, alpha)
         ctx.variables = logits, labels, alpha, gamma
         return loss
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         '''
         compute gradient of focal loss
         '''
         logits, labels, alpha, gamma = ctx.variables
-        grads = focal_cpp.focalloss_backward(grad_output, logits, labels, gamma, alpha)
+        grads = focal_cpp.focalloss_backward(logits, labels, gamma, alpha)
+        grads.mul_(grad_output)
+        return grads, None, None, None
+
+
+class FocalSigmoidLossFuncV3FB(torch.autograd.Function):
+    '''
+    use cpp/cuda to accelerate and shrink memory usage
+    '''
+    @staticmethod
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
+    def forward(ctx, logits, labels, alpha, gamma):
+        loss, grads = focal_cpp.focalloss_forward_backward(logits, labels, gamma, alpha)
+        ctx.variables = grads
+        return loss
+
+    @staticmethod
+    @amp.custom_bwd(device_type='cuda')
+    def backward(ctx, grad_output):
+        '''
+        compute gradient of focal loss
+        '''
+        grads = ctx.variables
+        grads.mul_(grad_output)
         return grads, None, None, None
 
 
@@ -170,7 +192,7 @@ class FocalLossV3(nn.Module):
             >>> lbs = torch.randint(0, 2, (8, 19, 384, 384)).float()
             >>> loss = criteria(logits, lbs)
         '''
-        loss = FocalSigmoidLossFuncV3.apply(logits, label, self.alpha, self.gamma)
+        loss = FocalSigmoidLossFuncV3FB.apply(logits, label, self.alpha, self.gamma)
         if self.reduction == 'mean':
             loss = loss.mean()
         if self.reduction == 'sum':
@@ -234,11 +256,11 @@ if __name__ == '__main__':
     optim1 = torch.optim.SGD(net1.parameters(), lr=1e-2)
     optim2 = torch.optim.SGD(net2.parameters(), lr=1e-2)
 
-    bs = 16
-    for it in range(300000):
-        inten = torch.randn(bs, 3, 224, 244).cuda()
+    bs = 17
+    for it in range(100):
+        inten = torch.randn(bs, 3, 225, 245).cuda()
         #  lbs = torch.randint(0, 2, (bs, 3, 224, 244)).float().cuda()
-        lbs = torch.randn(bs, 3, 224, 244).sigmoid().cuda()
+        lbs = torch.randn(bs, 3, 225, 245).sigmoid().cuda()
         inten = inten.double()
         lbs = lbs.double()
         logits = net1(inten)

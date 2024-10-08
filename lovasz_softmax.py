@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 #  grads = {}
 
@@ -75,7 +75,7 @@ import lovasz_softmax_cpp
 class LovaszSoftmaxFunctionV3(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd(cast_inputs=torch.float32)
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, logits, labels, ignore_index):
         losses, jacc = lovasz_softmax_cpp.lovasz_softmax_forward(logits,
                 labels, ignore_index)
@@ -84,7 +84,7 @@ class LovaszSoftmaxFunctionV3(torch.autograd.Function):
         return losses
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         logits, labels, jacc, ignore_index = ctx.vars
         grad = lovasz_softmax_cpp.lovasz_softmax_backward(grad_output, logits, labels, jacc, ignore_index)

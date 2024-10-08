@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 
 ##
@@ -24,7 +24,7 @@ class MishV1(nn.Module):
 class MishFunctionV2(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, feat):
         #  exp = torch.exp(feat)
         #  exp_plus = exp + 1
@@ -41,7 +41,7 @@ class MishFunctionV2(torch.autograd.Function):
         return out
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         grad = ctx.grad
         grad *= grad_output

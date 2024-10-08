@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 import soft_dice_cpp # should import torch before import this
 
 
@@ -70,7 +70,7 @@ class SoftDiceLossV2Func(torch.autograd.Function):
     compute backward directly for better numeric stability
     '''
     @staticmethod
-    @amp.custom_fwd(cast_inputs=torch.float32)
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, logits, labels, p, smooth):
         '''
         inputs:
@@ -90,7 +90,7 @@ class SoftDiceLossV2Func(torch.autograd.Function):
         return loss
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         '''
         compute gradient of soft-dice loss

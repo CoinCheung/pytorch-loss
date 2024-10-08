@@ -13,7 +13,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 
 ## GIOU loss is proposed here: https://arxiv.org/abs/1902.09630
@@ -191,7 +191,7 @@ class CIOURegFunc(torch.autograd.Function):
     forward and backward of CIOU regularization term
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, gt_bboxes, pr_bboxes, eps=1e-5):
         gt_w = gt_bboxes[:, 2] - gt_bboxes[:, 0]
         gt_h = gt_bboxes[:, 3] - gt_bboxes[:, 1]
@@ -231,7 +231,7 @@ class CIOURegFunc(torch.autograd.Function):
         return reg
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         d_gt_bbox, d_pr_bbox = ctx.variables
 

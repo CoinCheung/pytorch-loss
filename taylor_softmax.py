@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 
 '''
@@ -19,13 +19,13 @@ class TaylorSoftmaxFunc(torch.autograd.Function):
     use cpp/cuda to accelerate and shrink memory usage
     '''
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, feat, dim=1, n=2, use_log=False):
         ctx.vars = feat, dim, n, use_log
         return taylor_softmax_cpp.taylor_softmax_forward(feat, dim, n, use_log)
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         '''
         compute gradient of focal loss

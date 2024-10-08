@@ -13,7 +13,7 @@ Add convolution ops, such as coord-conv2d, and dynamic-conv2d(dy-conv2d).
 
 Some operators are implemented with pytorch cuda extension, so you need to compile it first: 
 ```
-    $ python setup.py install
+    $ python -m pip install .
 ```
 
 After installing, now you can pick up what you need and use the losses or ops like one of thes: 

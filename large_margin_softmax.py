@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 '''
 proposed in the BMVC2019 paper: [Large Margin in Softmax Cross-Entropy Loss
@@ -99,7 +99,7 @@ class LargeMarginSoftmaxV2(nn.Module):
 class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd(cast_inputs=torch.float32)
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, logits, labels, lam=0.3):
         num_classes = logits.size(1)
         coeff = 1. / (num_classes - 1.)
@@ -118,7 +118,7 @@ class LargeMarginSoftmaxFuncV2(torch.autograd.Function):
         return losses
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         '''
         compute gradient

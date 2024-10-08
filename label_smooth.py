@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 
 
@@ -60,7 +60,7 @@ class LabelSmoothSoftmaxCEV1(nn.Module):
 class LSRCrossEntropyFunctionV2(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd(cast_inputs=torch.float32)
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, logits, label, lb_smooth, lb_ignore):
         # prepare label
         num_classes = logits.size(1)
@@ -85,7 +85,7 @@ class LSRCrossEntropyFunctionV2(torch.autograd.Function):
         return loss
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_output):
         coeff, mask, logits, lb_one_hot = ctx.variables
 

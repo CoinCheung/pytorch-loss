@@ -40,7 +40,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 
 
@@ -69,7 +69,7 @@ class InfoNceDist(nn.Module):
 class InfoNceFunction(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, embs1, embs2, temper_factor, margin):
         assert embs1.size() == embs2.size()
         N, C = embs1.size()
@@ -108,7 +108,7 @@ class InfoNceFunction(torch.autograd.Function):
         return logits, labels
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_logits, grad_label):
         inds1, inds2, embs12, all_embs, temper_factor = ctx.vars
 

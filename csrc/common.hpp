@@ -6,61 +6,78 @@
 
 namespace math_ops {
 
+
 // exp func
 template<typename scalar_t>
 __forceinline__ __device__
 scalar_t Exp(scalar_t x) {
+    return expf(static_cast<float>(x));
+}
+
+template<>
+__forceinline__ __device__
+double Exp(double x) {
     return exp(x);
 }
+
 
 template<>
 __forceinline__ __device__
 c10::Half Exp(c10::Half x) {
     // return expf(static_cast<float>(x));
-    return hexp(x);
+    return hexp(static_cast<__half>(x));
 }
+
 
 //
 // log func
 template<typename scalar_t>
 __forceinline__ __device__
 scalar_t Log(scalar_t x) {
+    return logf(static_cast<float>(x));
+}
+
+template<>
+__forceinline__ __device__
+double Log(double x) {
     return log(x);
 }
 
 template<>
 __forceinline__ __device__
 c10::Half Log(c10::Half x) {
-    // return logf(static_cast<float>(x));
-    return hlog(x);
+    return hlog(static_cast<__half>(x));
 }
+
 
 // 
 // log1p
 template<typename scalar_t>
 __forceinline__ __device__
 scalar_t Log1p(scalar_t x) {
-    return log1p(x);
+    return log1pf(static_cast<float>(x));
 }
+
 
 template<>
 __forceinline__ __device__
-c10::Half Log1p(c10::Half x) {
-    return log1p(static_cast<float>(x));
+double Log1p(double x) {
+    return log1p(x);
 }
+
 
 // 
 // pow
 template<typename scalar_t>
 __forceinline__ __device__
 scalar_t Pow(scalar_t x, scalar_t y) {
-    return pow(x, y);
+    return powf(static_cast<float>(x), static_cast<float>(y));
 }
 
 template<>
 __forceinline__ __device__
-c10::Half Pow(c10::Half x, c10::Half y) {
-    return pow(static_cast<float>(x), static_cast<float>(y));
+double Pow(double x, double y) {
+    return pow(x, y);
 }
 
 // sqrt

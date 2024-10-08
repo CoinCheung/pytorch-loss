@@ -34,7 +34,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
-import torch.cuda.amp as amp
+import torch.amp as amp
 
 
 
@@ -91,7 +91,7 @@ class PartialFCAMSoftmax(nn.Module):
 class GatherFunction(torch.autograd.Function):
 
     @staticmethod
-    @amp.custom_fwd
+    @amp.custom_fwd(cast_inputs=torch.float32, device_type='cuda')
     def forward(ctx, embs, lbs):
         world_size = dist.get_world_size()
         rank = dist.get_rank()
@@ -114,7 +114,7 @@ class GatherFunction(torch.autograd.Function):
 
 
     @staticmethod
-    @amp.custom_bwd
+    @amp.custom_bwd(device_type='cuda')
     def backward(ctx, grad_all_embs, grad_all_lbs):
         world_size = dist.get_world_size()
         rank = dist.get_rank()
