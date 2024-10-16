@@ -14,10 +14,9 @@
 #include <iostream>
 #include "common.hpp"
 
-using std::cout;
-using std::endl;
 
-#define BLOCKSIZE 512
+#define BLOCKSIZE 256
+#define GRIDSIZE_MAX 512
 
 // TODO: 
 // at::numeric_limits<scalar_t>::lowest;
@@ -42,30 +41,18 @@ const int max_threads = 1024;
 // consider max_active_blocks when assign grid blocks, the total number of blocks should not be greater than max_active_blocks which is multiProcessCount
 
 
+using block_ops::reduce_max_shm;
+using block_ops::reduce_sum_shm;
+using block_ops::reduce_max_shfl;
+using block_ops::reduce_sum_shfl;
+
+using math_ops::Exp;
+using math_ops::Log;
+using math_ops::Log1p;
+
+
 namespace large_margin_space {
 
-template<typename scalar_t>
-__forceinline__ __device__ void reduce_max(scalar_t* sdata, int tid) {
-    __syncthreads();
-    for (unsigned int s{blockDim.x / 2}; s > 0; s >>= 1) {
-        if (tid < s) {
-            if (sdata[tid] < sdata[tid + s]) sdata[tid] = sdata[tid + s];
-        }
-        __syncthreads();
-    }
-}
-
-
-template<typename scalar_t>
-__forceinline__ __device__ void reduce_sum(scalar_t* sdata, int tid) {
-    __syncthreads();
-    for (unsigned int s{blockDim.x / 2}; s > 0; s >>= 1) {
-        if (tid < s) {
-            sdata[tid] += sdata[tid + s];
-        }
-        __syncthreads();
-    }
-}
 
 template<typename scalar_t>
 __forceinline__ __device__ void compute_reduce_values(
@@ -88,7 +75,7 @@ __forceinline__ __device__ void compute_reduce_values(
         scalar_t val = logits[idx];
         if (val > sdata[tid]) sdata[tid] = val;
     }
-    reduce_max(sdata, tid);
+    reduce_max_shm(sdata, tid);
     if (tid == 0) {
         sdata[blockDim.x] = sdata[0];
         sdata[blockDim.x + 1] = sdata[0];
@@ -107,7 +94,7 @@ __forceinline__ __device__ void compute_reduce_values(
         scalar_t val = logits[idx];
         sdata[tid] += exp(val - sdata[blockDim.x]);
     }
-    reduce_sum<scalar_t>(sdata, tid);
+    reduce_sum_shm<scalar_t>(sdata, tid);
     if (tid == 0) sdata[blockDim.x + 2] = sdata[0];
     __syncthreads();
 
@@ -118,7 +105,7 @@ __forceinline__ __device__ void compute_reduce_values(
         scalar_t val = logits[idx];
         sdata[tid] += exp(val - sdata[blockDim.x + 1]);
     }
-    reduce_sum<scalar_t>(sdata, tid);
+    reduce_sum_shm<scalar_t>(sdata, tid);
     if (tid == 0) sdata[blockDim.x + 3] = sdata[0];
 }
 
@@ -139,7 +126,7 @@ __forceinline__ __device__ void compute_sum_of_qx(
         scalar_t val = logits[idx];
         sdata[tid] += val * exp(val - sdata[blockDim.x]);
     }
-    reduce_sum<scalar_t>(sdata, tid);
+    reduce_sum_shm<scalar_t>(sdata, tid);
     if (tid == 0) {
         sdata[blockDim.x + 5] = sdata[0] / sdata[blockDim.x + 2]; 
     }
@@ -195,14 +182,14 @@ __global__ void LMarginLossForward(const int n_size,
                 term += log(sdata[blockDim.x + 3]);
             } else {
                 dval -= sdata[blockDim.x];
-                term = exp(dval) / sdata[blockDim.x + 2];
-                term -= sdata[blockDim.x + 4];
-                term *= (dval - log(sdata[blockDim.x + 2]));
+                term = exp(dval) / sdata[blockDim.x + 2]; // q
+                term -= sdata[blockDim.x + 4]; // q - coeff
+                term *= (dval - log(sdata[blockDim.x + 2])); // (q - coeff) * log(q)
                 term *= scalar_t(lam / 2.f);
             }
             sdata[tid] += term;
         }
-        large_margin_space::reduce_sum<scalar_t>(sdata, tid);
+        reduce_sum_shm<scalar_t>(sdata, tid);
         if (tid == 0) losses[i] = sdata[0];
     }
 }
@@ -251,14 +238,14 @@ __global__ void LMarginLossBackward(const int n_size,
         for (int j{tid}; j < dimsize; j += blockDim.x) {
             int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
             scalar_t val = logits[idx];
-            scalar_t pc = exp(val - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3];
+            scalar_t pc = exp(val - sdata[blockDim.x + 1]) / sdata[blockDim.x + 3]; // p
             scalar_t gval;
             if (j == lb) {
-                gval = pc - one;
+                gval = pc - one; // p - 1
             } else {
-                gval = val - sdata[blockDim.x + 5] + one;
-                gval *= exp(val - sdata[blockDim.x]) / sdata[blockDim.x + 2];
-                gval = pc + (gval - sdata[blockDim.x + 4]) * scalar_t(lam / 2.);
+                gval = val - sdata[blockDim.x + 5] + one; // x - 1 - sum_qx
+                gval *= exp(val - sdata[blockDim.x]) / sdata[blockDim.x + 2]; // q * (x - 1 - sum_qx)
+                gval = pc + (gval - sdata[blockDim.x + 4]) * scalar_t(lam / 2.); 
             }
             grad_logits[idx] = gval;
         }
@@ -346,6 +333,7 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
         int lb = static_cast<int>(labels[i]);
         int n_idx = i / m_size;
         int m_idx = i % m_size;
+
         if (lb == ignore_index) {
             for (int j{0}; j < dimsize; ++j) {
                 int idx = n_idx * dimsize * m_size + j * m_size + m_idx; 
@@ -394,6 +382,228 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
         }
     }
 }
+
+
+
+template<typename scalar_t>
+__global__ void SpatialLMarginLossForwardBackward(const int n_size,
+                                            const int dimsize, const int m_size,
+                                            scalar_t *losses,
+                                            scalar_t *grad_logits,
+                                            int64_t *valid_cnt,
+                                            const scalar_t *logits,
+                                            const int64_t *labels,
+                                            const int64_t ignore_index,
+                                            const float lam) {
+    // const int samplesize = n_size * m_size;
+    // const int stride = gridDim.x * blockDim.x;
+    __shared__ int samplesize;
+    __shared__ int stride;
+    samplesize = n_size * m_size;
+    stride = gridDim.x * blockDim.x;
+
+    int64_t cnt = 0;
+    for (int i{static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x)};
+            i < samplesize; i += stride) {
+        const int lb = static_cast<int>(labels[i]);
+        // int n_idx = i / m_size;
+        // int m_idx = i % m_size;
+        // int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+
+        if (lb == ignore_index) {
+            losses[i] = scalar_t(0.f);
+            for (int j{0}; j < dimsize; ++j) {
+                int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
+                grad_logits[idx] = scalar_t(0.f);
+            }
+            continue;
+        }
+        ++cnt;
+
+        // compute max and sum exp
+        scalar_t max_val(-10000.);
+        scalar_t sum_with_lb(0.);
+        scalar_t sum_no_lb(0.);
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
+            scalar_t val = logits[idx];
+            if (val > max_val) {
+                sum_with_lb *= Exp(max_val - val);
+                sum_no_lb *= Exp(max_val - val);
+                max_val = val;
+            }
+            sum_with_lb += Exp(val - max_val);
+            sum_no_lb = (j == lb) ? sum_no_lb : sum_no_lb + Exp(val - max_val);
+        }
+
+        // compute sum of qx
+        scalar_t sum_qx(0.);
+        for (int j{0}; j < dimsize; ++j) {
+            if (j == lb) continue;
+            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
+            scalar_t val = logits[idx];
+            sum_qx += val * Exp(val - max_val);
+        }
+        sum_qx /= sum_no_lb;
+
+        // compute losses and grads
+        scalar_t loss_val(0.);
+        for (int j{0}; j < dimsize; ++j) {
+            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
+            scalar_t val = logits[idx];
+
+            // p = exp(x) / sum_exp_with_lb
+            // q = exp(x) / sum_exp_no_lb, only negative
+            // coeff = 1 / (n_classes - 1)
+            // positive:
+            //     loss = log(p)
+            //     grad = p - 1
+            // negative:
+            //     loss = (lam / 2) * (q - coeff) * log(q)
+            //     grad = p + (lam / 2) * ( (x + 1 - sum(q * x)) * q - coeff )
+
+            const scalar_t p = Exp(val - max_val) / sum_with_lb;
+            const scalar_t q = Exp(val - max_val) / sum_no_lb;
+            const scalar_t coeff = scalar_t(1. / (dimsize - 1));
+
+            if (lb == j) {
+                loss_val += - (val - max_val) + Log(sum_with_lb);
+                val = p - scalar_t(1.);
+            } else {
+                loss_val += scalar_t(lam / 2.) * (q - coeff) * (val - max_val - Log(sum_no_lb));
+                val = p + scalar_t(lam / 2.) * ((val + scalar_t(1.) - sum_qx) * q - coeff);
+            }
+            grad_logits[idx] = val;
+        }
+        losses[i] = loss_val;
+    }
+
+    reduce_sum_shfl(cnt, false);
+    if (threadIdx.x == 0) {
+        atomicAdd(valid_cnt, cnt);
+    }
+}
+
+
+template<typename scalar_t>
+__global__ void LMarginLossForwardBackward(const int n_size,
+                            const int dimsize, const int m_size,
+                            scalar_t *losses,
+                            scalar_t *grad_logits,
+                            int64_t *valid_cnt,
+                            const scalar_t *logits,
+                            const int64_t *labels,
+                            const int64_t ignore_index,
+                            const float lam) {
+    
+    __shared__ int samplesize;
+    __shared__ int64_t cnt;
+    __shared__ int lb;
+    if (threadIdx.x == 0) cnt = 0;
+    samplesize = n_size * m_size;
+
+    for (int i{static_cast<int>(blockIdx.x)}; i < samplesize; i += gridDim.x) {
+
+        if (threadIdx.x == 0) {
+            lb = static_cast<int>(labels[i]);
+        }
+        __syncthreads();
+
+        // int n_idx = i / m_size;
+        // int m_idx = i % m_size;
+        // int idx = n_idx * dimsize * m_size + j * m_size + m_idx;
+
+        if (lb == ignore_index) {
+            if (threadIdx.x == 0) {
+                losses[i] = scalar_t(0.f);
+            }
+
+            for (int j{threadIdx.x}; j < dimsize; j += blockDim.x) {
+                int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size); 
+                grad_logits[idx] = scalar_t(0.f);
+            }
+            continue;
+        } 
+
+        if (threadIdx.x == 0) {
+            ++cnt;
+        }
+
+        // compute max and sum exp
+         
+        scalar_t max_val(-10000.);
+        scalar_t sum_with_lb(0.);
+        scalar_t sum_no_lb(0.);
+        for (int j{threadIdx.x}; j < dimsize; j += blockDim.x) {
+            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
+            scalar_t val = logits[idx];
+            if (val > max_val) {
+                sum_with_lb *= exp(max_val - val);
+                sum_no_lb *= exp(max_val - val);
+                max_val = val;
+            }
+            sum_with_lb += exp(val - max_val);
+            sum_no_lb = (j == lb) ? sum_no_lb : sum_no_lb + exp(val - max_val);
+        }
+        scalar_t tmp = max_val;
+        reduce_max_shfl(tmp, true); // max of whole block
+        sum_with_lb *= exp(max_val - tmp);
+        sum_no_lb *= exp(max_val - tmp);
+        max_val = tmp;
+        reduce_sum_shfl(sum_with_lb, true);
+        reduce_sum_shfl(sum_no_lb, true);
+
+        // compute sum of qx
+        scalar_t sum_qx(0.);
+        for (int j{threadIdx.x}; j < dimsize; j += blockDim.x) {
+            if (j == lb) continue;
+            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
+            scalar_t val = logits[idx];
+            sum_qx += val * exp(val - max_val);
+        }
+        reduce_sum_shfl(sum_qx, true);
+        sum_qx /= sum_no_lb;
+
+        // compute losses and grads
+        scalar_t loss_val(0.);
+        for (int j{threadIdx.x}; j < dimsize; j += blockDim.x) {
+            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
+            scalar_t val = logits[idx];
+
+            // p = exp(x) / sum_exp_with_lb
+            // q = exp(x) / sum_exp_no_lb, only negative
+            // coeff = 1 / (n_classes - 1)
+            // positive: 
+            //     loss = log(p)
+            //     grad = p - 1
+            // negative: 
+            //     loss = (lam / 2) * (q - coeff) * log(q)
+            //     grad = p + (lam / 2) * ( (x + 1 - sum(q * x)) * q - coeff )
+
+            const scalar_t p = exp(val - max_val) / sum_with_lb;
+            const scalar_t q = exp(val - max_val) / sum_no_lb;
+            const scalar_t coeff = scalar_t(1. / (dimsize - 1));
+
+            if (lb == j) {
+                loss_val += - (val - max_val) + log(sum_with_lb); 
+                val = p - scalar_t(1.);
+            } else {
+                loss_val += scalar_t(lam / 2.) * (q - coeff) * (val - max_val - log(sum_no_lb));
+                val = p + scalar_t(lam / 2.) * ((val + scalar_t(1.) - sum_qx) * q - coeff);
+            }
+            grad_logits[idx] = val;
+        }
+        reduce_sum_shfl(loss_val, false);
+        if (threadIdx.x == 0) {
+            losses[i] = loss_val;
+        }
+    }
+
+    if (threadIdx.x == 0) {
+        atomicAdd(valid_cnt, cnt);
+    }
+}
+
 
 // cuda forward and backward
 at::Tensor large_margin_forward_cuda(const at::Tensor &logits,
@@ -478,7 +688,7 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
         return grad_logits;
     }
 
-    if (dimsize < 32 && samplesize > 4096) {
+    if (dimsize < 64) {
         int gridx = std::max(std::min(4096, samplesize / BLOCKSIZE), 1);
         dim3 block(BLOCKSIZE);
         dim3 grid(gridx);
@@ -518,6 +728,77 @@ at::Tensor large_margin_backward_cuda(const at::Tensor &logits,
     return grad_logits;
 }
 
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> large_margin_forward_backward_cuda(const at::Tensor &logits,
+                                  const at::Tensor &labels,
+                                  const int64_t ignore_index,
+                                  const float lam) {
+    // CHECK type and shape
+    AT_ASSERTM(logits.device().type() == c10::kCUDA, "logits should be cuda");
+    AT_ASSERTM(labels.device().type() == c10::kCUDA, "labels should be cuda");
+
+    const int n_size = logits.size(0);
+    const int dimsize = logits.size(1);
+    const int m_size = logits.numel() / (n_size * dimsize);
+    const int samplesize = labels.numel();
+
+    // allocate memory and cuda grid/block
+    auto losses = torch::empty_like(labels, logits.options());
+    auto grad_logits = torch::empty_like(logits);
+    auto options_cnt = torch::TensorOptions()
+                    .dtype(torch::kInt64)
+                    .device(logits.options().device())
+                    .requires_grad(false);
+    auto valid_cnt = torch::zeros({1}, options_cnt);
+    if (grad_logits.numel() == 0 or losses.numel() == 0) {
+        AT_CUDA_CHECK(cudaGetLastError());
+        return std::make_tuple(losses, grad_logits, valid_cnt);
+    }
+
+    if (dimsize < 64) {
+    // if (false) {
+        int gridx = std::max(std::min(GRIDSIZE_MAX, samplesize / BLOCKSIZE), 1);
+        dim3 block(BLOCKSIZE);
+        dim3 grid(gridx);
+
+        AT_DISPATCH_FLOATING_TYPES(grad_logits.scalar_type(), "spatial large margin forward backwrd", [&] {
+            SpatialLMarginLossForwardBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size, 
+                losses.contiguous().data_ptr<scalar_t>(),
+                grad_logits.contiguous().data_ptr<scalar_t>(),
+                valid_cnt.data_ptr<int64_t>(),
+                logits.contiguous().data_ptr<scalar_t>(), 
+                labels.contiguous().data_ptr<int64_t>(), 
+                ignore_index, lam 
+            );
+        });
+    } else {
+        int blockx = 32;
+        while (blockx < dimsize) blockx *= 2;
+        blockx = std::max(std::min(BLOCKSIZE, blockx / 4), 32);
+        int gridx = std::max(std::min(4096, samplesize), 1);
+        dim3 block(blockx);
+        dim3 grid(gridx);
+
+        // call kernel
+        AT_DISPATCH_FLOATING_TYPES(grad_logits.scalar_type(), "large margin forward backwrd", [&] {
+            LMarginLossForwardBackward<scalar_t><<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
+                n_size, dimsize, m_size,
+                losses.contiguous().data_ptr<scalar_t>(),
+                grad_logits.contiguous().data_ptr<scalar_t>(),
+                valid_cnt.data_ptr<int64_t>(),
+                logits.contiguous().data_ptr<scalar_t>(),
+                labels.contiguous().data_ptr<int64_t>(),
+                ignore_index, lam
+            );
+        });
+    }
+    AT_CUDA_CHECK(cudaGetLastError());
+    return std::make_tuple(losses, grad_logits, valid_cnt);
+}
+
+
+
 // python inferface
 at::Tensor large_margin_forward(const at::Tensor &logits,
                              const at::Tensor &labels,
@@ -544,7 +825,21 @@ at::Tensor large_margin_backward(const at::Tensor &logits,
 }
 
 
+std::tuple<at::Tensor, at::Tensor, at::Tensor> large_margin_forward_backward(const at::Tensor &logits,
+                                  const at::Tensor &labels,
+                                  const float lam,
+                                  const int64_t ignore_index) {
+    // TODO: try AT_ASSERTM
+    if ((logits.device().type() != c10::kCUDA) || (labels.device().type() != c10::kCUDA)) {
+        AT_ERROR("this large margin loss only supports gpu mode\n");
+    } 
+    at::DeviceGuard guard(logits.device());
+    return large_margin_forward_backward_cuda(logits, labels, ignore_index, lam);
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("l_margin_forward", &large_margin_forward, "large margin forward");
     m.def("l_margin_backward", &large_margin_backward, "large margin backward");
+    m.def("l_margin_forward_backward", &large_margin_forward_backward, "large margin forward backward");
 }

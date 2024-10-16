@@ -134,3 +134,185 @@ __host__ __device__ __forceinline__ T THCRoundUp(T a, T b) {
   return THCCeilDiv(a, b) * b;
 }
 
+
+namespace block_ops {
+
+
+template<typename scalar_t>
+__forceinline__ __device__
+void broadcast_block(scalar_t& val, int src_id) {
+    __shared__ scalar_t shm; 
+    if (threadIdx.x == src_id) {
+        shm = val;
+    }
+    __syncthreads();
+    val = shm;
+}
+
+template<typename scalar_t>
+__forceinline__ __device__ 
+void reduce_max_shm(scalar_t* sdata, int tid) {
+    __syncthreads();
+    for (unsigned int s{blockDim.x / 2}; s > 0; s >>= 1) {
+        if (tid < s) {
+            if (sdata[tid] < sdata[tid + s]) sdata[tid] = sdata[tid + s];
+        }
+        __syncthreads();
+    }
+}
+
+
+template<typename scalar_t>
+__forceinline__ __device__ 
+void reduce_sum_shm(scalar_t* sdata, int tid) {
+    __syncthreads();
+    for (unsigned int s{blockDim.x / 2}; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+}
+
+
+template<typename scalar_t>
+__forceinline__ __device__
+void reduce_sum_shfl(scalar_t& val, bool broadcast) {
+    /* this requires:
+     * 1. warp layout is along x axis
+     * 2. blockDim.x should be divisble by 32
+     * 3. blockDim.x should be less or equal to 1024
+     * 4. warpSize should be 32
+     * 5. only thread with threadIdx.x == 0 obtains correct answer */
+
+    __syncthreads();
+    val += __shfl_down_sync(0xffffffff, val, 16);
+    val += __shfl_down_sync(0xffffffff, val, 8);
+    val += __shfl_down_sync(0xffffffff, val, 4);
+    val += __shfl_down_sync(0xffffffff, val, 2);
+    val += __shfl_down_sync(0xffffffff, val, 1);
+
+    __shared__ scalar_t shm[32];
+
+    if (threadIdx.x % 32 == 0) {
+        shm[threadIdx.x >> 5] = val;
+    }
+    __syncthreads();
+
+    val = scalar_t(0.);
+
+    /* from here actually only one warp work */
+    if (threadIdx.x < (blockDim.x >> 5)) {
+        val = shm[threadIdx.x];
+    }
+
+    if (threadIdx.x < 32) {
+        val += __shfl_down_sync(0xffffffff, val, 16);
+        val += __shfl_down_sync(0xffffffff, val, 8);
+        val += __shfl_down_sync(0xffffffff, val, 4);
+        val += __shfl_down_sync(0xffffffff, val, 2);
+        val += __shfl_down_sync(0xffffffff, val, 1);
+    }
+
+    if (broadcast) {
+        broadcast_block(val, 0);
+    }
+}
+
+
+/* logic is same as above, but must write this if we want to make it work */
+template<> __forceinline__ __device__
+void reduce_sum_shfl(c10::Half& val, bool broadcast) {
+    __syncthreads();
+
+    /* here we should cast to __half explicitly */
+    val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 16);
+    val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 8);
+    val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 4);
+    val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 2);
+    val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 1);
+
+    __shared__ __half shm[32];
+
+    if (threadIdx.x % 32 == 0) {
+        shm[threadIdx.x >> 5] = val;
+    }
+    __syncthreads();
+
+    /* here we should use __double2half to assign val into zero */
+    val = __double2half(0.);
+
+    if (threadIdx.x < (blockDim.x >> 5)) {
+        val = shm[threadIdx.x];
+    }
+
+    if (threadIdx.x < 32) {
+        val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 16);
+        val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 8);
+        val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 4);
+        val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 2);
+        val += __shfl_down_sync(0xffffffff, static_cast<__half>(val), 1);
+    }
+
+    if (broadcast) {
+        broadcast_block(val, 0);
+    }
+}
+
+
+template<typename scalar_t>
+__forceinline__ __device__
+void reduce_max_shfl(scalar_t& val, bool broadcast) {
+    /* same as reduce_sum_shfl, this requires:
+     * 1. warp layout is along x axis
+     * 2. blockDim.x should be divisble by 32
+     * 3. blockDim.x should be less or equal to 1024
+     * 4. warpSize should be 32
+     * 5. only thread with threadIdx.x == 0 obtains correct answer */
+
+    __syncthreads();
+    scalar_t tmp;
+    tmp = __shfl_down_sync(0xffffffff, val, 16);
+    if (tmp > val) val = tmp;
+    tmp = __shfl_down_sync(0xffffffff, val, 8);
+    if (tmp > val) val = tmp;
+    tmp = __shfl_down_sync(0xffffffff, val, 4);
+    if (tmp > val) val = tmp;
+    tmp = __shfl_down_sync(0xffffffff, val, 2);
+    if (tmp > val) val = tmp;
+    tmp = __shfl_down_sync(0xffffffff, val, 1);
+    if (tmp > val) val = tmp;
+
+    __shared__ scalar_t shm[32];
+
+    if (threadIdx.x % 32 == 0) {
+        shm[threadIdx.x >> 5] = val;
+    }
+    __syncthreads();
+
+    /* from here actually only one warp work */
+    if (threadIdx.x < (blockDim.x >> 5)) {
+        val = shm[threadIdx.x];
+    }
+
+    if (threadIdx.x < 32) {
+        tmp = __shfl_down_sync(0xffffffff, val, 16);
+        if (tmp > val) val = tmp;
+        tmp = __shfl_down_sync(0xffffffff, val, 8);
+        if (tmp > val) val = tmp;
+        tmp = __shfl_down_sync(0xffffffff, val, 4);
+        if (tmp > val) val = tmp;
+        tmp = __shfl_down_sync(0xffffffff, val, 2);
+        if (tmp > val) val = tmp;
+        tmp = __shfl_down_sync(0xffffffff, val, 1);
+        if (tmp > val) val = tmp;
+    }
+
+    if (broadcast) {
+        broadcast_block(val, 0);
+    }
+}
+
+
+}
+
