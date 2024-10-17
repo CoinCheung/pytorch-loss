@@ -21,7 +21,7 @@ using math_ops::Abs;
 
 
 #define BLOCKSIZE 256
-#define GRIDSIZE_MAX 512
+#define GRIDSIZE_MAX 4096
 #define VEC_TYPE float4
 
 

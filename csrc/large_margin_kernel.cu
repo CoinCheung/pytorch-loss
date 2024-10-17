@@ -16,7 +16,7 @@
 
 
 #define BLOCKSIZE 256
-#define GRIDSIZE_MAX 512
+#define GRIDSIZE_MAX 4096
 
 // TODO: 
 // at::numeric_limits<scalar_t>::lowest;
@@ -384,7 +384,6 @@ __global__ void SpatialLMarginLossBackward(const int n_size,
 }
 
 
-
 template<typename scalar_t>
 __global__ void SpatialLMarginLossForwardBackward(const int n_size,
                                             const int dimsize, const int m_size,
@@ -399,8 +398,10 @@ __global__ void SpatialLMarginLossForwardBackward(const int n_size,
     // const int stride = gridDim.x * blockDim.x;
     __shared__ int samplesize;
     __shared__ int stride;
+    __shared__ scalar_t coeff;
     samplesize = n_size * m_size;
     stride = gridDim.x * blockDim.x;
+    coeff = scalar_t(1. / (dimsize - 1));
 
     int64_t cnt = 0;
     for (int i{static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x)};
@@ -420,29 +421,23 @@ __global__ void SpatialLMarginLossForwardBackward(const int n_size,
         }
         ++cnt;
 
-        // compute max and sum exp
+        // compute max, sum exp and sum_qx
         scalar_t max_val(-10000.);
         scalar_t sum_with_lb(0.);
         scalar_t sum_no_lb(0.);
+        scalar_t sum_qx(0.);
         for (int j{0}; j < dimsize; ++j) {
             int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
             scalar_t val = logits[idx];
             if (val > max_val) {
                 sum_with_lb *= Exp(max_val - val);
                 sum_no_lb *= Exp(max_val - val);
+                sum_qx *= Exp(max_val - val);
                 max_val = val;
             }
             sum_with_lb += Exp(val - max_val);
             sum_no_lb = (j == lb) ? sum_no_lb : sum_no_lb + Exp(val - max_val);
-        }
-
-        // compute sum of qx
-        scalar_t sum_qx(0.);
-        for (int j{0}; j < dimsize; ++j) {
-            if (j == lb) continue;
-            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
-            scalar_t val = logits[idx];
-            sum_qx += val * Exp(val - max_val);
+            sum_qx = (j == lb) ? sum_qx : sum_qx + val * Exp(val - max_val);
         }
         sum_qx /= sum_no_lb;
 
@@ -452,19 +447,20 @@ __global__ void SpatialLMarginLossForwardBackward(const int n_size,
             int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
             scalar_t val = logits[idx];
 
-            // p = exp(x) / sum_exp_with_lb
-            // q = exp(x) / sum_exp_no_lb, only negative
-            // coeff = 1 / (n_classes - 1)
-            // positive:
-            //     loss = log(p)
-            //     grad = p - 1
-            // negative:
-            //     loss = (lam / 2) * (q - coeff) * log(q)
-            //     grad = p + (lam / 2) * ( (x + 1 - sum(q * x)) * q - coeff )
+            /* 
+             * Method: 
+             * p = exp(x) / sum_exp_with_lb
+             * q = exp(x) / sum_exp_no_lb, only negative
+             * coeff = 1 / (n_classes - 1)
+             * positive:
+             *     loss = log(p)
+             *     grad = p - 1
+             * negative:
+             *     loss = (lam / 2) * (q - coeff) * log(q)
+             *     grad = p + (lam / 2) * ( (x + 1 - sum(q * x)) * q - coeff ) */
 
             const scalar_t p = Exp(val - max_val) / sum_with_lb;
             const scalar_t q = Exp(val - max_val) / sum_no_lb;
-            const scalar_t coeff = scalar_t(1. / (dimsize - 1));
 
             if (lb == j) {
                 loss_val += - (val - max_val) + Log(sum_with_lb);
@@ -499,8 +495,10 @@ __global__ void LMarginLossForwardBackward(const int n_size,
     __shared__ int samplesize;
     __shared__ int64_t cnt;
     __shared__ int lb;
+    __shared__ scalar_t coeff;
     if (threadIdx.x == 0) cnt = 0;
     samplesize = n_size * m_size;
+    coeff = scalar_t(1. / (dimsize - 1));
 
     for (int i{static_cast<int>(blockIdx.x)}; i < samplesize; i += gridDim.x) {
 
@@ -529,38 +527,32 @@ __global__ void LMarginLossForwardBackward(const int n_size,
             ++cnt;
         }
 
-        // compute max and sum exp
-         
+        // compute max, sum exp and sum_qx
         scalar_t max_val(-10000.);
         scalar_t sum_with_lb(0.);
         scalar_t sum_no_lb(0.);
+        scalar_t sum_qx(0.);
         for (int j{threadIdx.x}; j < dimsize; j += blockDim.x) {
             int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
             scalar_t val = logits[idx];
             if (val > max_val) {
-                sum_with_lb *= exp(max_val - val);
-                sum_no_lb *= exp(max_val - val);
+                sum_with_lb *= Exp(max_val - val);
+                sum_no_lb *= Exp(max_val - val);
+                sum_qx *= Exp(max_val - val);
                 max_val = val;
             }
-            sum_with_lb += exp(val - max_val);
-            sum_no_lb = (j == lb) ? sum_no_lb : sum_no_lb + exp(val - max_val);
+            sum_with_lb += Exp(val - max_val);
+            sum_no_lb = (j == lb) ? sum_no_lb : sum_no_lb + Exp(val - max_val);
+            sum_qx = (j == lb) ? sum_qx : sum_qx + val * Exp(val - max_val);
         }
         scalar_t tmp = max_val;
         reduce_max_shfl(tmp, true); // max of whole block
-        sum_with_lb *= exp(max_val - tmp);
-        sum_no_lb *= exp(max_val - tmp);
+        sum_with_lb *= Exp(max_val - tmp);
+        sum_no_lb *= Exp(max_val - tmp);
+        sum_qx *= Exp(max_val - tmp);
         max_val = tmp;
         reduce_sum_shfl(sum_with_lb, true);
         reduce_sum_shfl(sum_no_lb, true);
-
-        // compute sum of qx
-        scalar_t sum_qx(0.);
-        for (int j{threadIdx.x}; j < dimsize; j += blockDim.x) {
-            if (j == lb) continue;
-            int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
-            scalar_t val = logits[idx];
-            sum_qx += val * exp(val - max_val);
-        }
         reduce_sum_shfl(sum_qx, true);
         sum_qx /= sum_no_lb;
 
@@ -570,25 +562,27 @@ __global__ void LMarginLossForwardBackward(const int n_size,
             int idx = (i / m_size) * dimsize * m_size + j * m_size + (i % m_size);
             scalar_t val = logits[idx];
 
-            // p = exp(x) / sum_exp_with_lb
-            // q = exp(x) / sum_exp_no_lb, only negative
-            // coeff = 1 / (n_classes - 1)
-            // positive: 
-            //     loss = log(p)
-            //     grad = p - 1
-            // negative: 
-            //     loss = (lam / 2) * (q - coeff) * log(q)
-            //     grad = p + (lam / 2) * ( (x + 1 - sum(q * x)) * q - coeff )
+            /* 
+             * Method: 
+             * p = exp(x) / sum_exp_with_lb
+             * q = exp(x) / sum_exp_no_lb, only negative
+             * coeff = 1 / (n_classes - 1)
+             * positive:
+             *     loss = log(p)
+             *     grad = p - 1
+             * negative:
+             *     loss = (lam / 2) * (q - coeff) * log(q)
+             *     grad = p + (lam / 2) * ( (x + 1 - sum(q * x)) * q - coeff ) */
 
-            const scalar_t p = exp(val - max_val) / sum_with_lb;
-            const scalar_t q = exp(val - max_val) / sum_no_lb;
-            const scalar_t coeff = scalar_t(1. / (dimsize - 1));
+
+            const scalar_t p = Exp(val - max_val) / sum_with_lb;
+            const scalar_t q = Exp(val - max_val) / sum_no_lb;
 
             if (lb == j) {
-                loss_val += - (val - max_val) + log(sum_with_lb); 
+                loss_val += - (val - max_val) + Log(sum_with_lb); 
                 val = p - scalar_t(1.);
             } else {
-                loss_val += scalar_t(lam / 2.) * (q - coeff) * (val - max_val - log(sum_no_lb));
+                loss_val += scalar_t(lam / 2.) * (q - coeff) * (val - max_val - Log(sum_no_lb));
                 val = p + scalar_t(lam / 2.) * ((val + scalar_t(1.) - sum_qx) * q - coeff);
             }
             grad_logits[idx] = val;
@@ -796,7 +790,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> large_margin_forward_backward_cud
     AT_CUDA_CHECK(cudaGetLastError());
     return std::make_tuple(losses, grad_logits, valid_cnt);
 }
-
 
 
 // python inferface

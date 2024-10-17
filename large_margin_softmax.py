@@ -230,7 +230,6 @@ class LargeMarginSoftmaxV3(nn.Module):
 
 
 
-
 if __name__ == '__main__':
     import torchvision
     import torch
@@ -277,8 +276,8 @@ if __name__ == '__main__':
 
     #  criteria1 = LargeMarginSoftmaxV1(reduction='mean')
     criteria1 = LargeMarginSoftmaxV3(reduction='mean', fb=True)
-    criteria2 = LargeMarginSoftmaxV3(reduction='mean', fb=False)
-    #  criteria2 = LargeMarginSoftmaxV2(reduction='mean')
+    #  criteria2 = LargeMarginSoftmaxV3(reduction='mean', fb=False)
+    criteria2 = LargeMarginSoftmaxV2(reduction='mean')
     net1.cuda()
     net2.cuda()
     net1.train()
